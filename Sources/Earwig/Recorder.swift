@@ -1,23 +1,20 @@
 import AVFoundation
 import Foundation
-import ScreenCaptureKit
 
 /// Records two audio streams simultaneously:
 ///  - the microphone (your voice) via AVAudioEngine
-///  - system audio (everyone else on the call) via ScreenCaptureKit
+///  - system audio (everyone else on the call) via a CoreAudio process tap
 /// then merges them into a single .m4a file.
-final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
+final class Recorder {
     enum RecorderError: Error, LocalizedError {
         case alreadyRecording
         case notRecording
-        case noDisplay
         case exportFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .alreadyRecording: return "Already recording"
             case .notRecording: return "Not recording"
-            case .noDisplay: return "No display found for system audio capture"
             case .exportFailed(let why): return "Audio merge failed: \(why)"
             }
         }
@@ -28,15 +25,13 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private let engine = AVAudioEngine()
     private var micFile: AVAudioFile?
-    private var systemFile: AVAudioFile?
-    private var stream: SCStream?
-    private let sampleQueue = DispatchQueue(label: "io.darkin.earwig.audio")
+    private let systemTap = SystemAudioTap()
 
     private var workDir: URL!
     private var micURL: URL { workDir.appendingPathComponent("mic.caf") }
     private var systemURL: URL { workDir.appendingPathComponent("system.caf") }
 
-    /// Starts both captures. Throws if mic or screen-capture permission is missing.
+    /// Starts both captures. Throws if microphone or system-audio permission is missing.
     func start() async throws {
         guard !isRecording else { throw RecorderError.alreadyRecording }
 
@@ -44,8 +39,15 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             .appendingPathComponent("earwig-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
 
-        try await startSystemCapture()
-        try startMicCapture()
+        // System audio first: the tap creation triggers the (one-time)
+        // "System Audio Recording Only" permission prompt.
+        try systemTap.start(writingTo: systemURL)
+        do {
+            try startMicCapture()
+        } catch {
+            systemTap.stop()
+            throw error
+        }
 
         isRecording = true
         startedAt = Date()
@@ -64,46 +66,6 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         try engine.start()
     }
 
-    private func startSystemCapture() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        guard let display = content.displays.first else { throw RecorderError.noDisplay }
-
-        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-        let config = SCStreamConfiguration()
-        config.capturesAudio = true
-        config.excludesCurrentProcessAudio = true
-        config.sampleRate = 48000
-        config.channelCount = 2
-        // We only consume the audio output; keep video work minimal.
-        config.width = 2
-        config.height = 2
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-
-        let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-        try await stream.startCapture()
-        self.stream = stream
-    }
-
-    // MARK: SCStreamOutput
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sampleBuffer.isValid else { return }
-        guard let pcm = sampleBuffer.toPCMBuffer() else { return }
-        do {
-            if systemFile == nil {
-                systemFile = try AVAudioFile(forWriting: systemURL, settings: pcm.format.settings)
-            }
-            try systemFile?.write(from: pcm)
-        } catch {
-            Log.info("system audio write error: \(error)")
-        }
-    }
-
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Log.info("SCStream stopped with error: \(error)")
-    }
-
     /// Stops both captures and returns the merged m4a written to `destination`.
     func stop(mergedTo destination: URL) async throws -> URL {
         guard isRecording else { throw RecorderError.notRecording }
@@ -113,12 +75,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         engine.stop()
         micFile = nil
 
-        if let stream {
-            try? await stream.stopCapture()
-        }
-        stream = nil
-        sampleQueue.sync { } // drain in-flight sample writes
-        systemFile = nil
+        systemTap.stop()
 
         try await merge(to: destination)
         Log.info("Recording stopped, merged to \(destination.path)")
@@ -132,6 +89,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             let asset = AVURLAsset(url: url)
             guard let assetTrack = try? await asset.loadTracks(withMediaType: .audio).first else { continue }
             let duration = try await asset.load(.duration)
+            guard duration.seconds > 0 else { continue }
             guard let track = composition.addMutableTrack(
                 withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
             try track.insertTimeRange(
@@ -150,20 +108,5 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     var elapsed: TimeInterval {
         guard let startedAt else { return 0 }
         return Date().timeIntervalSince(startedAt)
-    }
-}
-
-extension CMSampleBuffer {
-    /// Converts an audio CMSampleBuffer from ScreenCaptureKit into an AVAudioPCMBuffer.
-    func toPCMBuffer() -> AVAudioPCMBuffer? {
-        guard let description = CMSampleBufferGetFormatDescription(self) else { return nil }
-        let format = AVAudioFormat(cmAudioFormatDescription: description)
-        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(self))
-        guard frames > 0,
-              let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
-        pcm.frameLength = frames
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            self, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList)
-        return status == noErr ? pcm : nil
     }
 }

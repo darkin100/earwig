@@ -5,7 +5,7 @@ A macOS menu bar app that listens for meetings (Microsoft Teams, Google Meet, Sl
 ## How it works
 
 1. **Detect** — polls CoreAudio every 2s for "microphone in use". When the mic goes active while a known meeting app is running, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen).
-2. **Record** — your mic via `AVAudioEngine` + everyone else via ScreenCaptureKit system-audio capture. The two streams are merged into one `.m4a`.
+2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
 3. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer`). Audio never leaves your Mac.
 4. **Notes** — the transcript is piped through `claude -p` (Claude Code CLI) to produce structured markdown (title, summary, key points, action items, cleaned transcript), written to `~/MeetingNotes/meeting-YYYY-MM-DD-HHmm.md`.
 
@@ -18,10 +18,8 @@ open Earwig.app
 
 First recording will prompt for permissions:
 - **Microphone** (your voice)
-- **Screen & System Audio Recording** (the other participants) — System Settings → Privacy & Security
+- **System Audio Recording Only** (the other participants)
 - **Speech Recognition** (transcription)
-
-After granting Screen Recording you may need to relaunch the app.
 
 ## Menu bar
 
