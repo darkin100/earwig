@@ -22,6 +22,8 @@ final class SystemAudioTap {
     private var aggregateID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
     private var file: AVAudioFile?
+    private var tapFormat: AVAudioFormat?
+    private var loggedWriteError = false
     private let queue = DispatchQueue(label: "io.darkin.earwig.systemtap")
 
     func start(writingTo url: URL) throws {
@@ -51,9 +53,7 @@ final class SystemAudioTap {
             var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
             status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
             guard status == noErr else { throw TapError.coreAudio("read tap format", status) }
-            guard let format = AVAudioFormat(streamDescription: &asbd) else {
-                throw TapError.coreAudio("build AVAudioFormat", -1)
-            }
+            let sampleRate = asbd.mSampleRate > 0 ? asbd.mSampleRate : 48000
 
             // Aggregate device wrapping the default output device + our tap.
             let outputUID = try Self.defaultOutputDeviceUID()
@@ -78,17 +78,55 @@ final class SystemAudioTap {
             guard status == noErr else { throw TapError.coreAudio("AudioHardwareCreateAggregateDevice", status) }
             aggregateID = aggregate
 
-            let audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
-            file = audioFile
-
+            // The file is created lazily on the first IO callback so its format
+            // can be derived from the buffer layout the tap actually delivers
+            // (interleaved vs deinterleaved varies and a mismatch makes every
+            // write fail with OSStatus -50).
             status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, queue) { [weak self] _, inInputData, _, _, _ in
-                guard let self, let file = self.file else { return }
-                guard let buffer = AVAudioPCMBuffer(
-                    pcmFormat: format, bufferListNoCopy: inInputData, deallocator: nil) else { return }
+                guard let self else { return }
+                let ablPointer = UnsafeMutableAudioBufferListPointer(
+                    UnsafeMutablePointer(mutating: inInputData))
+                guard ablPointer.count > 0 else { return }
+
+                if self.file == nil {
+                    let bufferCount = ablPointer.count
+                    let channelsPerBuffer = max(1, ablPointer[0].mNumberChannels)
+                    let interleaved = bufferCount == 1
+                    let channels = interleaved
+                        ? AVAudioChannelCount(channelsPerBuffer)
+                        : AVAudioChannelCount(bufferCount)
+                    guard let format = AVAudioFormat(
+                        commonFormat: .pcmFormatFloat32,
+                        sampleRate: sampleRate,
+                        channels: channels,
+                        interleaved: interleaved) else {
+                        Log.info("system tap: could not build format (buffers=\(bufferCount) ch=\(channelsPerBuffer))")
+                        return
+                    }
+                    self.tapFormat = format
+                    do {
+                        self.file = try AVAudioFile(
+                            forWriting: url,
+                            settings: format.settings,
+                            commonFormat: .pcmFormatFloat32,
+                            interleaved: interleaved)
+                        Log.info("system tap writing \(channels)ch \(interleaved ? "interleaved" : "deinterleaved") @ \(Int(sampleRate))Hz")
+                    } catch {
+                        Log.info("system tap: could not create file: \(error)")
+                        return
+                    }
+                }
+
+                guard let file = self.file, let format = self.tapFormat,
+                      let buffer = AVAudioPCMBuffer(
+                        pcmFormat: format, bufferListNoCopy: inInputData, deallocator: nil) else { return }
                 do {
                     try file.write(from: buffer)
                 } catch {
-                    Log.info("system tap write error: \(error)")
+                    if !self.loggedWriteError {
+                        self.loggedWriteError = true
+                        Log.info("system tap write error: \(error)")
+                    }
                 }
             }
             guard status == noErr, ioProcID != nil else {
@@ -119,6 +157,8 @@ final class SystemAudioTap {
         }
         queue.sync { } // drain in-flight writes
         file = nil
+        tapFormat = nil
+        loggedWriteError = false
     }
 
     // MARK: helpers
