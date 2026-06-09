@@ -41,6 +41,32 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
     exit(exitCode)
 }
 
+// Headless mode: `Earwig --test-record <seconds> <output.m4a>` records mic +
+// system audio for N seconds and writes the merged file. Used to verify the
+// capture path without the GUI.
+if let flagIndex = args.firstIndex(of: "--test-record"), args.count > flagIndex + 2,
+   let seconds = Double(args[flagIndex + 1]) {
+    let outURL = URL(fileURLWithPath: (args[flagIndex + 2] as NSString).expandingTildeInPath)
+    let semaphore = DispatchSemaphore(value: 0)
+    var exitCode: Int32 = 0
+    Task {
+        let recorder = Recorder()
+        do {
+            print("Recording \(seconds)s of mic + system audio...")
+            try await recorder.start()
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            _ = try await recorder.stop(mergedTo: outURL)
+            print("Wrote \(outURL.path)")
+        } catch {
+            print("FAILED: \(error)")
+            exitCode = 1
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    exit(exitCode)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
