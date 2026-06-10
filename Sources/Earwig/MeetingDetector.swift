@@ -18,6 +18,7 @@ final class MeetingDetector {
         MeetingApp(bundleIDPrefixes: ["com.microsoft.teams"], displayName: "Microsoft Teams", isBrowser: false),
         MeetingApp(bundleIDPrefixes: ["com.tinyspeck.slackmacgap"], displayName: "Slack", isBrowser: false),
         MeetingApp(bundleIDPrefixes: ["us.zoom.xos"], displayName: "Zoom", isBrowser: false),
+        MeetingApp(bundleIDPrefixes: ["net.whatsapp.WhatsApp"], displayName: "WhatsApp", isBrowser: false),
         MeetingApp(bundleIDPrefixes: ["com.google.Chrome"], displayName: "Chrome (Google Meet?)", isBrowser: true),
         MeetingApp(bundleIDPrefixes: ["com.apple.Safari"], displayName: "Safari (Google Meet?)", isBrowser: true),
         MeetingApp(bundleIDPrefixes: ["com.microsoft.edgemac"], displayName: "Edge (Google Meet?)", isBrowser: true),

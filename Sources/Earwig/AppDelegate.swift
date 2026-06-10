@@ -165,11 +165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// While recording, watch whether a meeting app is still using the mic.
-    /// Once one has been seen and then stays gone for 45s, the meeting is over.
+    /// While recording, watch whether anything is still using the mic.
+    /// Calls can roll from one app to another (Teams all-hands -> WhatsApp
+    /// follow-up), so the stop signal is "no app at all holds the mic", not
+    /// "the meeting app left" — Earwig itself is excluded from the check.
     private func autoStopTick() {
         guard recorder.isRecording else { return }
-        let onMic = MeetingDetector.meetingAppsUsingMic()
+        let onMic = MeetingDetector.bundleIDsUsingMic()
         if !onMic.isEmpty {
             sawMeetingOnMic = true
             meetingSilentTicks = 0
@@ -178,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard sawMeetingOnMic else { return } // manual/test recording — never auto-stop
         meetingSilentTicks += 1
         if meetingSilentTicks >= autoStopAfterTicks {
-            Log.info("Meeting app left the microphone — auto-stopping recording")
+            Log.info("Microphone released by all apps — auto-stopping recording")
             stopRecordingAndProcess()
         }
     }
