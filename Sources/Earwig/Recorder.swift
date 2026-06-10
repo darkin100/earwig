@@ -83,9 +83,14 @@ final class Recorder {
     }
 
     private func merge(to destination: URL) async throws {
+        try await Recorder.merge(inputs: [micURL, systemURL], to: destination)
+    }
+
+    /// Mixes any number of audio files into a single m4a.
+    static func merge(inputs: [URL], to destination: URL) async throws {
         let composition = AVMutableComposition()
         var added = 0
-        for url in [micURL, systemURL] where FileManager.default.fileExists(atPath: url.path) {
+        for url in inputs where FileManager.default.fileExists(atPath: url.path) {
             let asset = AVURLAsset(url: url)
             guard let assetTrack = try? await asset.loadTracks(withMediaType: .audio).first else { continue }
             let duration = try await asset.load(.duration)

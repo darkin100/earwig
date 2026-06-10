@@ -15,6 +15,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var elapsedTimer: Timer?
     private var pipelineState: String? // non-nil while transcribing/formatting
 
+    // Auto-stop: once a meeting app has been seen on the mic during a
+    // recording, stop automatically after it has been off the mic this long.
+    private var autoStopTimer: Timer?
+    private var sawMeetingOnMic = false
+    private var meetingSilentTicks = 0
+    private let autoStopAfterTicks = 9 // 9 ticks x 5s = 45s of "meeting app off mic"
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         config.ensureFolders()
         setupStatusItem()
@@ -142,6 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                     self?.updateStatusLine()
                 }
+                sawMeetingOnMic = false
+                meetingSilentTicks = 0
+                autoStopTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                    self?.autoStopTick()
+                }
                 updateIcon()
                 updateStatusLine()
             } catch {
@@ -153,12 +165,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// While recording, watch whether a meeting app is still using the mic.
+    /// Once one has been seen and then stays gone for 45s, the meeting is over.
+    private func autoStopTick() {
+        guard recorder.isRecording else { return }
+        let onMic = MeetingDetector.meetingAppsUsingMic()
+        if !onMic.isEmpty {
+            sawMeetingOnMic = true
+            meetingSilentTicks = 0
+            return
+        }
+        guard sawMeetingOnMic else { return } // manual/test recording — never auto-stop
+        meetingSilentTicks += 1
+        if meetingSilentTicks >= autoStopAfterTicks {
+            Log.info("Meeting app left the microphone — auto-stopping recording")
+            stopRecordingAndProcess()
+        }
+    }
+
     private func stopRecordingAndProcess() {
         let apps = currentMeetingApps
         let startedAt = recorder.startedAt ?? Date()
         let duration = recorder.elapsed
         elapsedTimer?.invalidate()
         elapsedTimer = nil
+        autoStopTimer?.invalidate()
+        autoStopTimer = nil
 
         let stamp = Self.fileStamp(for: startedAt)
         let audioURL = config.audioFolderURL.appendingPathComponent("meeting-\(stamp).m4a")

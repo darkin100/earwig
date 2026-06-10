@@ -4,7 +4,7 @@ A macOS menu bar app that listens for meetings (Microsoft Teams, Google Meet, Sl
 
 ## How it works
 
-1. **Detect** — polls CoreAudio every 2s for "microphone in use". When the mic goes active while a known meeting app is running, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen).
+1. **Detect** — polls CoreAudio every 2s for per-process microphone usage. When a known meeting app starts capturing the mic, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen). When the meeting app releases the mic for 45s, recording **auto-stops** and processing begins.
 2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
 3. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer`). Audio never leaves your Mac.
 4. **Notes** — the transcript is piped through `claude -p` (Claude Code CLI) to produce structured markdown (title, summary, key points, action items, cleaned transcript), written to `~/MeetingNotes/meeting-YYYY-MM-DD-HHmm.md`.
@@ -57,6 +57,16 @@ System Settings → General → Login Items → add `Earwig.app`.
 
 ## Notes / limitations (MVP)
 
-- Browser detection is heuristic: any mic use while Chrome/Safari/etc. is running may prompt (it can't see *which* tab). Dedicated apps (Teams, Slack, Zoom) take precedence in the prompt label.
-- Recording stops manually from the menu bar (the mic-in-use signal can't distinguish the meeting ending from our own recording).
+- Browser detection is per-process but not per-tab: any mic use by Chrome/Safari/etc. may prompt (Meet or otherwise). Dedicated apps (Teams, Slack, Zoom) take precedence in the prompt label.
+- Auto-stop applies only when a meeting app was seen on the mic during the recording; manual test recordings never auto-stop.
 - One audio file with both sides mixed; no speaker diarisation yet.
+
+## Salvage an unstopped recording
+
+If a recording is interrupted (app killed, crash), the raw captures live in a
+`$TMPDIR/earwig-*` folder. Merge and process them:
+
+```sh
+./Earwig.app/Contents/MacOS/Earwig --merge out.m4a <dir>/mic.caf <dir>/system.caf
+./Earwig.app/Contents/MacOS/Earwig --process out.m4a
+```

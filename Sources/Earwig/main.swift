@@ -41,6 +41,29 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
     exit(exitCode)
 }
 
+// Headless mode: `Earwig --merge <out.m4a> <in1> [in2 ...]` mixes audio files
+// into one m4a. Used to salvage recordings that were never stopped in-app.
+if let flagIndex = args.firstIndex(of: "--merge"), args.count > flagIndex + 2 {
+    let outURL = URL(fileURLWithPath: (args[flagIndex + 1] as NSString).expandingTildeInPath)
+    let inputs = args[(flagIndex + 2)...].map {
+        URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+    let semaphore = DispatchSemaphore(value: 0)
+    var exitCode: Int32 = 0
+    Task {
+        do {
+            try await Recorder.merge(inputs: Array(inputs), to: outURL)
+            print("Merged \(inputs.count) file(s) -> \(outURL.path)")
+        } catch {
+            print("FAILED: \(error)")
+            exitCode = 1
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    exit(exitCode)
+}
+
 // Headless mode: `Earwig --test-record <seconds> <output.m4a>` records mic +
 // system audio for N seconds and writes the merged file. Used to verify the
 // capture path without the GUI.

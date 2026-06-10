@@ -51,16 +51,13 @@ final class MeetingDetector {
 
     private func tick() {
         guard !suspended else { return }
-        let active = micIsActive()
+        // Precise detection: which meeting apps are actively capturing the mic?
+        let appsOnMic = Self.meetingAppsUsingMic()
+        let active = !appsOnMic.isEmpty
         defer { micWasActive = active }
         guard active, !micWasActive else { return }
 
-        // Mic just became active. Is a meeting app running?
-        let candidates = runningMeetingApps()
-        guard !candidates.isEmpty else {
-            Log.info("Mic became active but no known meeting app is running")
-            return
-        }
+        let candidates = appsOnMic
         if let last = lastPromptDate, Date().timeIntervalSince(last) < promptCooldown {
             return
         }
@@ -82,6 +79,78 @@ final class MeetingDetector {
         // Prefer dedicated meeting apps; only mention browsers if no dedicated app matched.
         let dedicated = names.filter { !$0.contains("?") }
         return dedicated.isEmpty ? names : dedicated
+    }
+
+    /// Display names of known meeting apps that are actively capturing the
+    /// microphone right now (per-process attribution, macOS 14.4+).
+    static func meetingAppsUsingMic() -> [String] {
+        var names: [String] = []
+        for bundleID in bundleIDsUsingMic() {
+            if let app = knownApps.first(where: { app in
+                app.bundleIDPrefixes.contains(where: { bundleID.hasPrefix($0) })
+            }) {
+                if !names.contains(app.displayName) { names.append(app.displayName) }
+            }
+        }
+        let dedicated = names.filter { !$0.contains("?") }
+        return dedicated.isEmpty ? names : dedicated
+    }
+
+    /// Bundle IDs of all processes currently capturing audio input.
+    static func bundleIDsUsingMic() -> [String] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard status == noErr, size > 0 else { return [] }
+
+        var processes = [AudioObjectID](
+            repeating: AudioObjectID(kAudioObjectUnknown),
+            count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &processes)
+        guard status == noErr else { return [] }
+
+        let ownPID = getpid()
+        var bundleIDs: [String] = []
+        for process in processes where process != kAudioObjectUnknown {
+            var running: UInt32 = 0
+            var runningSize = UInt32(MemoryLayout<UInt32>.size)
+            var runningAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyIsRunningInput,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            guard AudioObjectGetPropertyData(
+                process, &runningAddress, 0, nil, &runningSize, &running) == noErr,
+                running != 0 else { continue }
+
+            var pid: pid_t = 0
+            var pidSize = UInt32(MemoryLayout<pid_t>.size)
+            var pidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyPID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectGetPropertyData(process, &pidAddress, 0, nil, &pidSize, &pid) == noErr,
+               pid == ownPID { continue }
+
+            var bundle: CFString = "" as CFString
+            var bundleSize = UInt32(MemoryLayout<CFString>.size)
+            var bundleAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyBundleID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let bundleStatus = withUnsafeMutablePointer(to: &bundle) { ptr in
+                AudioObjectGetPropertyData(process, &bundleAddress, 0, nil, &bundleSize, ptr)
+            }
+            if bundleStatus == noErr {
+                let id = bundle as String
+                if !id.isEmpty { bundleIDs.append(id) }
+            }
+        }
+        return bundleIDs
     }
 
     /// True when any process is pulling audio from the default input device.
