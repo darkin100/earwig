@@ -13,7 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordMenuItem: NSMenuItem!
     private var lastNoteMenuItem: NSMenuItem!
     private var elapsedTimer: Timer?
-    private var pipelineState: String? // non-nil while transcribing/formatting
+    // Transcriptions run in the background, serialized so concurrent
+    // SpeechAnalyzer sessions don't fight over the model. Detection re-arms as
+    // soon as a recording is merged, so back-to-back meetings are caught while
+    // earlier ones are still transcribing.
+    private var activePipelines = 0
+    private var pipelineChain: Task<Void, Never> = Task {}
 
     // Auto-stop: once a meeting app has been seen on the mic during a
     // recording, stop automatically after it has been off the mic this long.
@@ -87,9 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             symbol = "record.circle.fill"
             description = "Earwig recording"
             button.contentTintColor = .systemRed
-        } else if pipelineState != nil {
+        } else if activePipelines > 0 {
             symbol = "waveform.circle"
-            description = "Earwig processing"
+            description = "Earwig transcribing"
             button.contentTintColor = nil
         } else {
             symbol = "ear"
@@ -102,10 +107,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusLine() {
         if recorder.isRecording {
             let secs = Int(recorder.elapsed)
-            statusMenuItem.title = String(format: "Recording %02d:%02d", secs / 60, secs % 60)
+            var title = String(format: "Recording %02d:%02d", secs / 60, secs % 60)
+            if activePipelines > 0 { title += " · transcribing previous" }
+            statusMenuItem.title = title
             recordMenuItem.title = "Stop Recording & Transcribe"
-        } else if let state = pipelineState {
-            statusMenuItem.title = state
+        } else if activePipelines > 0 {
+            statusMenuItem.title = activePipelines == 1
+                ? "Transcribing…"
+                : "Transcribing \(activePipelines) recordings…"
             recordMenuItem.title = "Start Recording"
         } else {
             statusMenuItem.title = "Idle — waiting for meetings"
@@ -197,46 +206,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let stamp = Self.fileStamp(for: startedAt)
         let audioURL = config.audioFolderURL.appendingPathComponent("meeting-\(stamp).m4a")
 
-        pipelineState = "Finishing recording…"
-        updateIcon()
-        updateStatusLine()
-
         Task { @MainActor in
-            defer {
-                detector.suspended = false
-                currentMeetingApps = []
-            }
             do {
                 _ = try await recorder.stop(mergedTo: audioURL)
-
-                pipelineState = "Transcribing…"
+            } catch {
+                detector.suspended = false
+                currentMeetingApps = []
+                Log.info("Recording stop failed: \(error)")
+                showError("Meeting processing failed", detail: error.localizedDescription)
                 updateIcon(); updateStatusLine()
-                let transcript = try await Transcriber.transcribe(
-                    audioURL: audioURL, localeIdentifier: config.localeIdentifier)
+                return
+            }
 
-                let cfg = config
-                let notes = TranscriptNote.markdown(
-                    transcript: transcript,
-                    meetingDate: startedAt,
-                    duration: duration,
-                    apps: apps)
+            // Recording is safely on disk — start listening for the next
+            // meeting right away; transcription continues in the background.
+            detector.suspended = false
+            currentMeetingApps = []
+            activePipelines += 1
+            updateIcon(); updateStatusLine()
 
-                let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
-                try notes.write(to: noteURL, atomically: true, encoding: .utf8)
-                if !cfg.keepAudio {
-                    try? FileManager.default.removeItem(at: audioURL)
-                }
+            let cfg = config
+            pipelineChain = Task { [previous = pipelineChain] in
+                await previous.value
+                await self.transcribeAndWrite(
+                    audioURL: audioURL, startedAt: startedAt, duration: duration,
+                    apps: apps, stamp: stamp, config: cfg)
+            }
+        }
+    }
+
+    private func transcribeAndWrite(
+        audioURL: URL, startedAt: Date, duration: TimeInterval,
+        apps: [String], stamp: String, config cfg: Config
+    ) async {
+        do {
+            let transcript = try await Transcriber.transcribe(
+                audioURL: audioURL, localeIdentifier: cfg.localeIdentifier)
+            let notes = TranscriptNote.markdown(
+                transcript: transcript,
+                meetingDate: startedAt,
+                duration: duration,
+                apps: apps)
+            let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
+            try notes.write(to: noteURL, atomically: true, encoding: .utf8)
+            if !cfg.keepAudio {
+                try? FileManager.default.removeItem(at: audioURL)
+            }
+            Log.info("Note written: \(noteURL.path)")
+            await MainActor.run {
                 lastNoteURL = noteURL
                 lastNoteMenuItem.title = "Last note: \(noteURL.lastPathComponent)"
                 lastNoteMenuItem.isHidden = false
-                Log.info("Note written: \(noteURL.path)")
                 NSSound(named: "Hero")?.play()
-            } catch {
-                Log.info("Pipeline failed: \(error)")
-                showError("Meeting processing failed", detail: error.localizedDescription +
-                    "\nThe audio (if captured) is in \(config.audioFolder).")
             }
-            pipelineState = nil
+        } catch {
+            Log.info("Pipeline failed for \(audioURL.lastPathComponent): \(error)")
+            await MainActor.run {
+                showError("Meeting transcription failed", detail: error.localizedDescription +
+                    "\nThe audio is preserved at \(audioURL.path) — re-run with --process.")
+            }
+        }
+        await MainActor.run {
+            activePipelines -= 1
             updateIcon()
             updateStatusLine()
         }
@@ -269,10 +300,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() {
-        if recorder.isRecording {
+        if recorder.isRecording || activePipelines > 0 {
             let alert = NSAlert()
-            alert.messageText = "Recording in progress"
-            alert.informativeText = "Stop recording and quit? The current recording will be discarded."
+            alert.messageText = recorder.isRecording
+                ? "Recording in progress"
+                : "Transcription in progress"
+            alert.informativeText = recorder.isRecording
+                ? "Stop recording and quit? The current recording will be discarded."
+                : "A recording is still being transcribed. Quit anyway? The audio is saved — re-run it later with --process."
             alert.addButton(withTitle: "Quit Anyway")
             alert.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)
