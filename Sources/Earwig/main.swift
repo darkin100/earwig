@@ -18,14 +18,11 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
             let transcript = try await Transcriber.transcribe(
                 audioURL: audioURL, localeIdentifier: config.localeIdentifier)
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")
-            print("Generating notes...")
-            let notes = NotesGenerator.generateNotes(
+            let notes = TranscriptNote.markdown(
                 transcript: transcript,
                 meetingDate: Date(),
                 duration: 0,
-                apps: ["manual --process run"],
-                claudeCommand: config.claudeCommand,
-                claudeModel: config.effectiveClaudeModel)
+                apps: ["manual --process run"])
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL

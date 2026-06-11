@@ -214,18 +214,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let transcript = try await Transcriber.transcribe(
                     audioURL: audioURL, localeIdentifier: config.localeIdentifier)
 
-                pipelineState = "Generating notes with Claude…"
-                updateStatusLine()
                 let cfg = config
-                let notes = await Task.detached(priority: .userInitiated) {
-                    NotesGenerator.generateNotes(
-                        transcript: transcript,
-                        meetingDate: startedAt,
-                        duration: duration,
-                        apps: apps,
-                        claudeCommand: cfg.claudeCommand,
-                        claudeModel: cfg.effectiveClaudeModel)
-                }.value
+                let notes = TranscriptNote.markdown(
+                    transcript: transcript,
+                    meetingDate: startedAt,
+                    duration: duration,
+                    apps: apps)
 
                 let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
                 try notes.write(to: noteURL, atomically: true, encoding: .utf8)

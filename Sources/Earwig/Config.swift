@@ -4,20 +4,13 @@ struct Config: Codable {
     var notesFolder: String
     var audioFolder: String
     var keepAudio: Bool
-    var claudeCommand: String
-    // Optional so configs written by older builds still decode.
-    var claudeModel: String?
     var localeIdentifier: String
-
-    var effectiveClaudeModel: String { claudeModel ?? "haiku" }
 
     static var defaultConfig: Config {
         Config(
             notesFolder: ("~/MeetingNotes" as NSString).expandingTildeInPath,
             audioFolder: ("~/MeetingNotes/audio" as NSString).expandingTildeInPath,
             keepAudio: true,
-            claudeCommand: "claude",
-            claudeModel: "haiku",
             localeIdentifier: "en_GB"
         )
     }
