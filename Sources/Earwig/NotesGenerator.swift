@@ -75,6 +75,14 @@ enum NotesGenerator {
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
         process.environment = env
 
+        // Run claude in our own Application Support dir. Its project-context
+        // scanning then stays out of TCC-protected folders (Desktop/Documents),
+        // which would otherwise trigger folder-access prompts blamed on Earwig.
+        let workdir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Earwig", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+        process.currentDirectoryURL = workdir
+
         let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
