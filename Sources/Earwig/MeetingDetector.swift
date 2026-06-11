@@ -38,7 +38,8 @@ final class MeetingDetector {
     private let promptCooldown: TimeInterval = 90
 
     func start() {
-        micWasActive = micIsActive() // don't fire for a call already in progress at launch
+        // Don't fire for a call already in progress at launch.
+        micWasActive = !Self.meetingAppsUsingMic().isEmpty
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -71,30 +72,32 @@ final class MeetingDetector {
 
     func runningMeetingApps() -> [String] {
         let running = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
-        var names: [String] = []
-        for app in Self.knownApps {
-            if running.contains(where: { id in app.bundleIDPrefixes.contains(where: { id.hasPrefix($0) }) }) {
-                names.append(app.displayName)
-            }
+        let apps = Self.knownApps.filter { app in
+            running.contains(where: { id in app.bundleIDPrefixes.contains(where: { id.hasPrefix($0) }) })
         }
-        // Prefer dedicated meeting apps; only mention browsers if no dedicated app matched.
-        let dedicated = names.filter { !$0.contains("?") }
-        return dedicated.isEmpty ? names : dedicated
+        return Self.preferDedicated(apps).map(\.displayName)
+    }
+
+    /// Dedicated meeting apps are a stronger signal than browsers (which could
+    /// be using the mic for anything) — only mention browsers when no
+    /// dedicated app matched.
+    private static func preferDedicated(_ apps: [MeetingApp]) -> [MeetingApp] {
+        let dedicated = apps.filter { !$0.isBrowser }
+        return dedicated.isEmpty ? apps : dedicated
     }
 
     /// Display names of known meeting apps that are actively capturing the
     /// microphone right now (per-process attribution, macOS 14.4+).
     static func meetingAppsUsingMic() -> [String] {
-        var names: [String] = []
+        var apps: [MeetingApp] = []
         for bundleID in bundleIDsUsingMic() {
             if let app = knownApps.first(where: { app in
                 app.bundleIDPrefixes.contains(where: { bundleID.hasPrefix($0) })
-            }) {
-                if !names.contains(app.displayName) { names.append(app.displayName) }
+            }), !apps.contains(where: { $0.displayName == app.displayName }) {
+                apps.append(app)
             }
         }
-        let dedicated = names.filter { !$0.contains("?") }
-        return dedicated.isEmpty ? names : dedicated
+        return preferDedicated(apps).map(\.displayName)
     }
 
     /// Bundle IDs of all processes currently capturing audio input.
@@ -154,27 +157,4 @@ final class MeetingDetector {
         return bundleIDs
     }
 
-    /// True when any process is pulling audio from the default input device.
-    func micIsActive() -> Bool {
-        var deviceID = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
-        guard status == noErr, deviceID != 0 else { return false }
-
-        var running: UInt32 = 0
-        size = UInt32(MemoryLayout<UInt32>.size)
-        address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &running)
-        return status == noErr && running != 0
-    }
 }

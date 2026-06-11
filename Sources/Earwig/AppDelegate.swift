@@ -1,7 +1,11 @@
 import AppKit
 import Foundation
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+// @unchecked Sendable: every member is only touched from the main thread
+// (AppKit delegate callbacks, main-runloop Timers, and explicit MainActor
+// hops in the pipeline) — the annotation just records that contract for the
+// Sendable checker.
+final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var statusItem: NSStatusItem!
     private let detector = MeetingDetector()
     private let prompt = RecordPrompt()

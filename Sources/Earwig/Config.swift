@@ -11,7 +11,7 @@ struct Config: Codable {
             notesFolder: ("~/MeetingNotes" as NSString).expandingTildeInPath,
             audioFolder: ("~/MeetingNotes/audio" as NSString).expandingTildeInPath,
             keepAudio: true,
-            localeIdentifier: "en_GB"
+            localeIdentifier: Locale.current.identifier
         )
     }
 
