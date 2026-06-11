@@ -9,7 +9,8 @@ enum NotesGenerator {
         meetingDate: Date,
         duration: TimeInterval,
         apps: [String],
-        claudeCommand: String
+        claudeCommand: String,
+        claudeModel: String
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -49,7 +50,7 @@ enum NotesGenerator {
         \(transcript)
         """
 
-        if let notes = runClaude(command: claudeCommand, prompt: prompt),
+        if let notes = runClaude(command: claudeCommand, model: claudeModel, prompt: prompt),
            !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return header + notes
         }
@@ -64,10 +65,10 @@ enum NotesGenerator {
         """
     }
 
-    private static func runClaude(command: String, prompt: String) -> String? {
+    private static func runClaude(command: String, model: String, prompt: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [command, "-p"]
+        process.arguments = [command, "-p", "--model", model]
         // GUI apps inherit a minimal PATH; include Homebrew + local bins.
         var env = ProcessInfo.processInfo.environment
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin"

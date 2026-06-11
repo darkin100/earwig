@@ -24,7 +24,8 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
                 meetingDate: Date(),
                 duration: 0,
                 apps: ["manual --process run"],
-                claudeCommand: config.claudeCommand)
+                claudeCommand: config.claudeCommand,
+                claudeModel: config.effectiveClaudeModel)
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL

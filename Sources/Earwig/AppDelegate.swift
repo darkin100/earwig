@@ -223,7 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         meetingDate: startedAt,
                         duration: duration,
                         apps: apps,
-                        claudeCommand: cfg.claudeCommand)
+                        claudeCommand: cfg.claudeCommand,
+                        claudeModel: cfg.effectiveClaudeModel)
                 }.value
 
                 let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
