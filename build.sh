@@ -39,5 +39,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --sign - "$APP"
+# Prefer the stable local signing identity so TCC permission grants survive
+# rebuilds; fall back to ad-hoc if it doesn't exist on this machine.
+IDENTITY="Earwig Dev Signing"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+    codesign --force --sign "$IDENTITY" "$APP"
+    echo "Signed with $IDENTITY"
+else
+    codesign --force --sign - "$APP"
+    echo "Signed ad-hoc ($IDENTITY identity not found)"
+fi
 echo "Built $APP"
