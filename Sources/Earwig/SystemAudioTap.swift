@@ -2,10 +2,8 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-/// Captures system audio (everything routed to the default output device)
-/// using a CoreAudio process tap (macOS 14.4+). Unlike ScreenCaptureKit this
-/// only needs the narrow "System Audio Recording Only" permission, not full
-/// Screen Recording access.
+/// CoreAudio process tap (macOS 14.4+) for system audio. Needs only "System Audio Recording Only",
+/// not full Screen Recording access (unlike ScreenCaptureKit).
 final class SystemAudioTap {
     enum TapError: Error, LocalizedError {
         case coreAudio(String, OSStatus)
@@ -25,6 +23,19 @@ final class SystemAudioTap {
     private var tapFormat: AVAudioFormat?
     private var loggedWriteError = false
     private let queue = DispatchQueue(label: "io.darkin.earwig.systemtap")
+
+    /// Creates and destroys a tap to trigger the TCC prompt. Returns true if access is granted.
+    static func probePermission() -> Bool {
+        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+        description.name = "Earwig permission probe"
+        description.isPrivate = true
+        var tap = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioHardwareCreateProcessTap(description, &tap)
+        if tap != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(tap)
+        }
+        return status == noErr
+    }
 
     func start(writingTo url: URL) throws {
         // Exclude our own process so prompt/notification chimes don't end up

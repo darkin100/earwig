@@ -1,10 +1,13 @@
-import AVFoundation
 import Foundation
 import Speech
 
-/// On-device speech-to-text. Prefers the macOS 26 SpeechAnalyzer API
-/// (designed for long-form audio); falls back to SFSpeechRecognizer.
+/// On-device speech-to-text. Prefers WhisperKit (large-v3) for accuracy;
+/// falls back to SFSpeechRecognizer when Whisper is unavailable.
 enum Transcriber {
+    /// Shared WhisperKit-backed engine. A single instance keeps the loaded model
+    /// cached across calls (back-to-back meetings reuse it).
+    private static let whisper = WhisperASR()
+
     enum TranscriberError: Error, LocalizedError {
         case localeUnsupported(String)
         case notAuthorized
@@ -19,66 +22,39 @@ enum Transcriber {
         }
     }
 
-    static func transcribe(audioURL: URL, localeIdentifier: String) async throws -> String {
-        let locale = Locale(identifier: localeIdentifier)
-        if #available(macOS 26.0, *) {
-            do {
-                let text = try await transcribeWithAnalyzer(audioURL: audioURL, locale: locale)
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
-            } catch {
-                Log.info("SpeechAnalyzer failed (\(error)); falling back to SFSpeechRecognizer")
-            }
-        }
-        return try await transcribeLegacy(audioURL: audioURL, locale: locale)
+    static func prewarm(progressCallback: (@Sendable (Progress) -> Void)? = nil) async throws {
+        try await whisper.prepareModel(progressCallback: progressCallback)
     }
 
-    // MARK: macOS 26 SpeechAnalyzer
+    static func join(_ segments: [TimedSegment]) -> String {
+        segments
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
 
-    @available(macOS 26.0, *)
-    private static func transcribeWithAnalyzer(audioURL: URL, locale: Locale) async throws -> String {
-        let supported = await SpeechTranscriber.supportedLocales
-        let useLocale = supported.first {
-            $0.identifier(.bcp47) == locale.identifier(.bcp47)
-        } ?? supported.first { $0.language.languageCode == locale.language.languageCode } ?? locale
-
-        let transcriber = SpeechTranscriber(
-            locale: useLocale,
-            transcriptionOptions: [],
-            reportingOptions: [],
-            attributeOptions: []
-        )
-
-        // Download the on-device model if needed.
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            Log.info("Downloading speech model for \(useLocale.identifier)...")
-            try await request.downloadAndInstall()
-        }
-
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-        let file = try AVAudioFile(forReading: audioURL)
-
-        let collector = Task {
-            var text = ""
-            for try await result in transcriber.results where result.isFinal {
-                text += String(result.text.characters)
-            }
-            return text
-        }
-
-        if let lastSample = try await analyzer.analyzeSequence(from: file) {
-            try await analyzer.finalizeAndFinish(through: lastSample)
-        } else {
-            await analyzer.cancelAndFinishNow()
-        }
-
-        let text = try await collector.value
+    static func transcribe(audioURL: URL, localeIdentifier: String) async throws -> String {
+        let segments = try await transcribeTimed(audioURL: audioURL, localeIdentifier: localeIdentifier)
+        let text = join(segments)
         guard !text.isEmpty else { throw TranscriberError.empty }
         return text
     }
 
+    /// Prefers WhisperKit; falls back to SFSpeechRecognizer on failure.
+    static func transcribeTimed(audioURL: URL, localeIdentifier: String) async throws -> [TimedSegment] {
+        do {
+            return try await whisper.transcribe(
+                audioURL: audioURL, localeIdentifier: localeIdentifier)
+        } catch {
+            Log.info("WhisperKit transcription failed (\(error)); falling back to SFSpeechRecognizer")
+        }
+        let locale = Locale(identifier: localeIdentifier)
+        return try await transcribeTimedLegacy(audioURL: audioURL, locale: locale)
+    }
+
     // MARK: Fallback — SFSpeechRecognizer
 
-    private static func transcribeLegacy(audioURL: URL, locale: Locale) async throws -> String {
+    private static func transcribeTimedLegacy(audioURL: URL, locale: Locale) async throws -> [TimedSegment] {
         let status = await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
         }
@@ -102,7 +78,14 @@ enum Transcriber {
                     cont.resume(throwing: error)
                 } else if let result, result.isFinal {
                     resumed = true
-                    cont.resume(returning: result.bestTranscription.formattedString)
+                    let segs = result.bestTranscription.segments.map { seg in
+                        TimedSegment(
+                            text: seg.substring,
+                            start: seg.timestamp,
+                            end: seg.timestamp + seg.duration
+                        )
+                    }
+                    cont.resume(returning: segs)
                 }
             }
         }

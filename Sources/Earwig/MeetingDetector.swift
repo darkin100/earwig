@@ -27,15 +27,14 @@ final class MeetingDetector {
         MeetingApp(bundleIDPrefixes: ["org.mozilla.firefox"], displayName: "Firefox (Google Meet?)", isBrowser: true),
     ]
 
-    /// Called on the main thread with the display names of candidate meeting apps.
     var onMeetingDetected: (([String]) -> Void)?
-    /// When true the detector ignores mic activity (we are the ones using the mic).
-    var suspended = false
+    var suspended = false  // set while Earwig itself is recording
 
     private var timer: Timer?
     private var micWasActive = false
     private var lastPromptDate: Date?
     private let promptCooldown: TimeInterval = 90
+    private var lastLoggedMicIDs: Set<String> = [] // only log when the set changes
 
     func start() {
         // Don't fire for a call already in progress at launch.
@@ -53,7 +52,19 @@ final class MeetingDetector {
 
     private func tick() {
         guard !suspended else { return }
-        // Precise detection: which meeting apps are actively capturing the mic?
+
+        // Log mic users on change so a real call reveals whether we match.
+        let rawIDs = Set(Self.bundleIDsUsingMic())
+        if rawIDs != lastLoggedMicIDs {
+            lastLoggedMicIDs = rawIDs
+            if rawIDs.isEmpty {
+                Log.info("Mic idle (no process capturing input)")
+            } else {
+                let matched = Self.meetingAppsUsingMic()
+                Log.info("Mic in use by: \(rawIDs.sorted().joined(separator: ", ")) — matched meeting app(s): \(matched.isEmpty ? "NONE" : matched.joined(separator: ", "))")
+            }
+        }
+
         let appsOnMic = Self.meetingAppsUsingMic()
         let active = !appsOnMic.isEmpty
         defer { micWasActive = active }
@@ -86,8 +97,7 @@ final class MeetingDetector {
         return dedicated.isEmpty ? apps : dedicated
     }
 
-    /// Display names of known meeting apps that are actively capturing the
-    /// microphone right now (per-process attribution, macOS 14.4+).
+    /// Display names of known meeting apps currently capturing the mic (per-process, macOS 14.4+).
     static func meetingAppsUsingMic() -> [String] {
         var apps: [MeetingApp] = []
         for bundleID in bundleIDsUsingMic() {
@@ -100,7 +110,6 @@ final class MeetingDetector {
         return preferDedicated(apps).map(\.displayName)
     }
 
-    /// Bundle IDs of all processes currently capturing audio input.
     static func bundleIDsUsingMic() -> [String] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,

@@ -1,3 +1,22 @@
 .build/
+.swiftpm/
 Earwig.app/
+dist/
 .DS_Store
+
+# Build-time secrets baked into Info.plist (e.g. the Resend feedback key). Never committed.
+.secrets/
+
+# Defensive: never commit API keys or secret stores, even if copied into the repo by mistake.
+# (The Anthropic key normally lives in ~/Library/Application Support/Earwig/secrets, outside git.)
+*.api-key
+**/secrets/
+secrets/
+
+# Claude Code / superpowers working artifacts — not part of the project
+docs/superpowers/
+.claude/
+
+# Regenerable icon preview (run scripts/make-icon.py)
+Resources/AppIcon-preview.png
+scripts/Earwig.iconset/
