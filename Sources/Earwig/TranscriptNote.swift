@@ -8,27 +8,53 @@ enum TranscriptNote {
         transcript: String,
         meetingDate: Date,
         duration: TimeInterval,
-        apps: [String]
+        apps: [String],
+        title: String? = nil,
+        windowTitles: [String] = []
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
         let dateString = dateFormatter.string(from: meetingDate)
         let minutes = Int((duration / 60).rounded())
+        let heading = title ?? "Meeting \(dateString)"
 
-        return """
+        var frontmatter = """
         ---
+        title: \(yamlQuoted(heading))
         date: \(dateString)
         duration_minutes: \(minutes)
         source: \(apps.isEmpty ? "manual recording" : apps.joined(separator: ", "))
+        """
+        if !windowTitles.isEmpty {
+            frontmatter += "\nwindow_titles:"
+            for windowTitle in windowTitles {
+                frontmatter += "\n  - \(yamlQuoted(windowTitle))"
+            }
+        }
+        frontmatter += """
+
         generated_by: earwig
         status: raw-transcript
         ---
+        """
 
-        # Meeting \(dateString)
+        return """
+        \(frontmatter)
+
+        # \(heading)
 
         ## Transcript
 
         \(transcript)
         """
+    }
+
+    /// Window titles are arbitrary text — always double-quote and escape for YAML.
+    private static func yamlQuoted(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: " ")
+        return "\"\(escaped)\""
     }
 }

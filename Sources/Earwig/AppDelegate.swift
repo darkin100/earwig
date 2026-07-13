@@ -5,7 +5,12 @@ import Foundation
 // (AppKit delegate callbacks, main-runloop Timers, and explicit MainActor
 // hops in the pipeline) — the annotation just records that contract for the
 // Sendable checker.
-final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
+    func menuWillOpen(_ menu: NSMenu) {
+        windowAccessMenuItem?.isHidden = WindowMonitor.isTrusted
+        updateStatusLine()
+    }
+
     private var statusItem: NSStatusItem!
     private let detector = MeetingDetector()
     private let prompt = RecordPrompt()
@@ -32,6 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var meetingSilentTicks = 0
     private let autoStopTickSeconds = 5
 
+    // Window-title tracking (Accessibility permission). Call windows seen
+    // during the session provide the meeting title and a fast end-of-call
+    // signal when they close.
+    private var sessionWindowTitles: Set<String> = []
+    private var sessionMeetingTitle: String?
+    private var windowAccessMenuItem: NSMenuItem!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         config.ensureFolders()
         setupStatusItem()
@@ -40,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self?.meetingDetected(apps: apps)
         }
         detector.start()
+        if !WindowMonitor.isTrusted {
+            Log.info("Accessibility not granted — meeting titles and window-close detection disabled")
+            WindowMonitor.requestTrust()
+        }
         Log.info("Earwig launched. Notes folder: \(config.notesFolder)")
     }
 
@@ -67,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         simulate.target = self
         menu.addItem(simulate)
 
+        windowAccessMenuItem = NSMenuItem(
+            title: "Enable Meeting Titles (Accessibility)…",
+            action: #selector(requestWindowAccess), keyEquivalent: "")
+        windowAccessMenuItem.target = self
+        windowAccessMenuItem.isHidden = WindowMonitor.isTrusted
+        menu.addItem(windowAccessMenuItem)
+
         menu.addItem(.separator())
 
         let openNotes = NSMenuItem(title: "Open Notes Folder", action: #selector(openNotesFolder), keyEquivalent: "o")
@@ -86,7 +109,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         quit.target = self
         menu.addItem(quit)
 
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    @objc private func requestWindowAccess() {
+        WindowMonitor.requestTrust()
     }
 
     private func updateIcon() {
@@ -166,6 +194,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 sawMeetingOnMic = false
                 sawAnyAppOnMic = false
                 meetingSilentTicks = 0
+                sessionWindowTitles = []
+                sessionMeetingTitle = nil
                 autoStopTimer = Timer.scheduledTimer(
                     withTimeInterval: TimeInterval(autoStopTickSeconds), repeats: true
                 ) { [weak self] _ in
@@ -182,15 +212,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
     }
 
-    /// While recording, watch whether anything is still using the mic.
-    /// Calls can roll from one app to another (Teams all-hands -> WhatsApp
-    /// The call-end signal is per-app microphone attribution: recording stops
-    /// once no *meeting app* has held the mic for the configured grace period.
-    /// Unrelated mic holders (dictation tools, a stray browser tab) don't keep
-    /// a session alive, so back-to-back calls become separate recordings —
-    /// while a quick handoff within the grace window (Teams -> WhatsApp) stays
-    /// one session. For calls on apps we don't recognise (manual recordings),
-    /// it falls back to "any app holds the mic". Earwig itself is excluded.
+    /// Two call-end signals, used together:
+    ///  - Microphone attribution: no *meeting app* has held the mic for the
+    ///    configured grace period. Unrelated mic holders (dictation tools, a
+    ///    stray browser tab) don't keep a session alive, so back-to-back calls
+    ///    become separate recordings — while a quick handoff within the grace
+    ///    window (Teams -> WhatsApp) stays one session.
+    ///  - Window close (needs Accessibility): the call windows seen during the
+    ///    session have all closed. This confirms the meeting really ended, so
+    ///    the stop happens after a short 10s confirmation instead of the full
+    ///    grace period.
+    /// For calls on apps we don't recognise (manual recordings), it falls back
+    /// to "any app holds the mic". Earwig itself is excluded everywhere.
     private func autoStopTick() {
         guard recorder.isRecording else { return }
 
@@ -204,6 +237,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             if !newApps.isEmpty {
                 currentMeetingApps.append(contentsOf: newApps)
                 Log.info("On the call: \(currentMeetingApps.joined(separator: ", "))")
+            }
+            // Capture call-window titles while the call is live: the meeting
+            // title for the note, and trackers for the window-close signal.
+            let callWindows = WindowMonitor.callWindowCandidates()
+            for window in callWindows where !sessionWindowTitles.contains(window.title) {
+                sessionWindowTitles.insert(window.title)
+                Log.info("Call window: \(window.app) — \(window.title)")
+            }
+            if sessionMeetingTitle == nil {
+                let onMicWindow = callWindows.first { meetingAppsOnMic.contains($0.app) }
+                sessionMeetingTitle = (onMicWindow ?? callWindows.first)?.title
             }
             return
         }
@@ -221,15 +265,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
 
         meetingSilentTicks += 1
-        if meetingSilentTicks * autoStopTickSeconds >= config.effectiveAutoStopGrace {
-            let what = sawMeetingOnMic ? "meeting app" : "app"
-            Log.info("Call ended — no \(what) on the microphone for \(config.effectiveAutoStopGrace)s; auto-stopping")
+
+        // If every call window we tracked has closed, the meeting is
+        // definitively over — stop after a short confirmation instead of
+        // waiting out the full grace period.
+        var grace = config.effectiveAutoStopGrace
+        if !sessionWindowTitles.isEmpty, WindowMonitor.isTrusted {
+            let openTitles = Set(WindowMonitor.callWindowCandidates().map(\.title))
+            if openTitles.isDisjoint(with: sessionWindowTitles) {
+                grace = min(10, grace)
+            }
+        }
+
+        if meetingSilentTicks * autoStopTickSeconds >= grace {
+            let reason = grace < config.effectiveAutoStopGrace
+                ? "call windows closed and mic released"
+                : "no \(sawMeetingOnMic ? "meeting app" : "app") on the microphone for \(grace)s"
+            Log.info("Call ended — \(reason); auto-stopping")
             stopRecordingAndProcess()
         }
     }
 
     private func stopRecordingAndProcess() {
         let apps = currentMeetingApps
+        let meetingTitle = sessionMeetingTitle
+        let windowTitles = sessionWindowTitles.sorted()
         let startedAt = recorder.startedAt ?? Date()
         let duration = recorder.elapsed
         elapsedTimer?.invalidate()
@@ -264,14 +324,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 await previous.value
                 await self.transcribeAndWrite(
                     audioURL: audioURL, startedAt: startedAt, duration: duration,
-                    apps: apps, stamp: stamp, config: cfg)
+                    apps: apps, meetingTitle: meetingTitle, windowTitles: windowTitles,
+                    stamp: stamp, config: cfg)
             }
         }
     }
 
     private func transcribeAndWrite(
         audioURL: URL, startedAt: Date, duration: TimeInterval,
-        apps: [String], stamp: String, config cfg: Config
+        apps: [String], meetingTitle: String?, windowTitles: [String],
+        stamp: String, config cfg: Config
     ) async {
         do {
             let transcript = try await Transcriber.transcribe(
@@ -280,7 +342,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 transcript: transcript,
                 meetingDate: startedAt,
                 duration: duration,
-                apps: apps)
+                apps: apps,
+                title: meetingTitle,
+                windowTitles: windowTitles)
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
             if !cfg.keepAudio {

@@ -8,20 +8,24 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
 
 1. **Detect** — polls CoreAudio every 2s for *per-process* microphone usage. When a known meeting app starts capturing the mic, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen).
 2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
-3. **Auto-stop** — a call is considered ended when no *meeting app* has held the microphone for `autoStopGraceSeconds` (default 30s); the recording then stops and processing begins. Each call becomes its own recording and transcript — a new call after the grace window gets a fresh detection prompt, even while the previous one is still transcribing. A quick handoff *within* the grace window (e.g. Teams call rolling into a WhatsApp call) stays one session, and every app that joined is listed in the note's `source:`. Unrelated mic users (dictation tools, a stray browser tab) can't keep a session alive. If the call is on an app Earwig doesn't recognise, it falls back to stopping when the mic is released entirely; manual recordings with nothing on the mic never auto-stop.
-4. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer` on older systems). Audio never leaves your Mac. Transcription runs in the background, so back-to-back meetings are detected while the previous one is still processing.
-5. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
+3. **Titles** *(optional, needs Accessibility)* — while recording, Earwig reads the meeting apps' window titles and identifies the call window (Teams meeting subject, Google Meet tab, Zoom topic, Slack huddle). The best candidate becomes the note's `title:`; all captured titles are listed under `window_titles:` for downstream context.
+4. **Auto-stop** — a call is considered ended when no *meeting app* has held the microphone for `autoStopGraceSeconds` (default 30s); the recording then stops and processing begins. With Accessibility granted there's a faster signal too: once every tracked call window has closed *and* the mic is free, recording stops after ~10s instead of the full grace period. Each call becomes its own recording and transcript — a new call after the grace window gets a fresh detection prompt, even while the previous one is still transcribing. A quick handoff *within* the grace window (e.g. Teams call rolling into a WhatsApp call) stays one session, and every app that joined is listed in the note's `source:`. Unrelated mic users (dictation tools, a stray browser tab) can't keep a session alive. If the call is on an app Earwig doesn't recognise, it falls back to stopping when the mic is released entirely; manual recordings with nothing on the mic never auto-stop.
+5. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer` on older systems). Audio never leaves your Mac. Transcription runs in the background, so back-to-back meetings are detected while the previous one is still processing.
+6. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
 ```markdown
 ---
+title: "Q3 Planning Sync"
 date: 2026-06-11 09:30
 duration_minutes: 42
 source: Microsoft Teams
+window_titles:
+  - "Q3 Planning Sync"
 generated_by: earwig
 status: raw-transcript
 ---
 
-# Meeting 2026-06-11 09:30
+# Q3 Planning Sync
 
 ## Transcript
 ...
@@ -52,6 +56,7 @@ The first recording prompts for:
 | **Microphone** | Your side of the conversation |
 | **System Audio Recording Only** | The other participants (via CoreAudio process tap — deliberately *not* the broader Screen & System Audio Recording permission) |
 | **Speech Recognition** | On-device transcription |
+| **Accessibility** *(optional)* | Reading meeting-window titles — provides the note's `title:` and a faster end-of-call signal. Prompted at launch; skip it and Earwig works fine without titles. Grant later via the menu ("Enable Meeting Titles…") or System Settings → Privacy & Security → Accessibility. |
 
 ### Keeping grants across rebuilds
 
