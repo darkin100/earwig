@@ -28,8 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     // recording, stop automatically after it has been off the mic this long.
     private var autoStopTimer: Timer?
     private var sawMeetingOnMic = false
+    private var sawAnyAppOnMic = false
     private var meetingSilentTicks = 0
-    private let autoStopAfterTicks = 9 // 9 ticks x 5s = 45s of "meeting app off mic"
+    private let autoStopTickSeconds = 5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         config.ensureFolders()
@@ -163,8 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     self?.updateStatusLine()
                 }
                 sawMeetingOnMic = false
+                sawAnyAppOnMic = false
                 meetingSilentTicks = 0
-                autoStopTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                autoStopTimer = Timer.scheduledTimer(
+                    withTimeInterval: TimeInterval(autoStopTickSeconds), repeats: true
+                ) { [weak self] _ in
                     self?.autoStopTick()
                 }
                 updateIcon()
@@ -180,20 +184,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     /// While recording, watch whether anything is still using the mic.
     /// Calls can roll from one app to another (Teams all-hands -> WhatsApp
-    /// follow-up), so the stop signal is "no app at all holds the mic", not
-    /// "the meeting app left" — Earwig itself is excluded from the check.
+    /// The call-end signal is per-app microphone attribution: recording stops
+    /// once no *meeting app* has held the mic for the configured grace period.
+    /// Unrelated mic holders (dictation tools, a stray browser tab) don't keep
+    /// a session alive, so back-to-back calls become separate recordings —
+    /// while a quick handoff within the grace window (Teams -> WhatsApp) stays
+    /// one session. For calls on apps we don't recognise (manual recordings),
+    /// it falls back to "any app holds the mic". Earwig itself is excluded.
     private func autoStopTick() {
         guard recorder.isRecording else { return }
-        let onMic = MeetingDetector.bundleIDsUsingMic()
-        if !onMic.isEmpty {
+
+        let meetingAppsOnMic = MeetingDetector.meetingAppsUsingMic()
+        if !meetingAppsOnMic.isEmpty {
             sawMeetingOnMic = true
             meetingSilentTicks = 0
+            // Record every app that joins the session so the note's `source:`
+            // reflects rolled-together calls.
+            let newApps = meetingAppsOnMic.filter { !currentMeetingApps.contains($0) }
+            if !newApps.isEmpty {
+                currentMeetingApps.append(contentsOf: newApps)
+                Log.info("On the call: \(currentMeetingApps.joined(separator: ", "))")
+            }
             return
         }
-        guard sawMeetingOnMic else { return } // manual/test recording — never auto-stop
+
+        if !sawMeetingOnMic {
+            // No known meeting app has ever held the mic this session — an
+            // unrecognised call app, or a manual recording. Fall back to
+            // watching for the mic being released entirely.
+            if !MeetingDetector.bundleIDsUsingMic().isEmpty {
+                sawAnyAppOnMic = true
+                meetingSilentTicks = 0
+                return
+            }
+            guard sawAnyAppOnMic else { return } // pure manual recording — never auto-stop
+        }
+
         meetingSilentTicks += 1
-        if meetingSilentTicks >= autoStopAfterTicks {
-            Log.info("Microphone released by all apps — auto-stopping recording")
+        if meetingSilentTicks * autoStopTickSeconds >= config.effectiveAutoStopGrace {
+            let what = sawMeetingOnMic ? "meeting app" : "app"
+            Log.info("Call ended — no \(what) on the microphone for \(config.effectiveAutoStopGrace)s; auto-stopping")
             stopRecordingAndProcess()
         }
     }

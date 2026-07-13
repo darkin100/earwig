@@ -5,13 +5,19 @@ struct Config: Codable {
     var audioFolder: String
     var keepAudio: Bool
     var localeIdentifier: String
+    // Seconds a call must be off the microphone before recording auto-stops.
+    // Optional so configs written by older builds still decode.
+    var autoStopGraceSeconds: Int?
+
+    var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
 
     static var defaultConfig: Config {
         Config(
             notesFolder: ("~/MeetingNotes" as NSString).expandingTildeInPath,
             audioFolder: ("~/MeetingNotes/audio" as NSString).expandingTildeInPath,
             keepAudio: true,
-            localeIdentifier: Locale.current.identifier
+            localeIdentifier: Locale.current.identifier,
+            autoStopGraceSeconds: 30
         )
     }
 

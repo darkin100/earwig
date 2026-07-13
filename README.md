@@ -8,7 +8,7 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
 
 1. **Detect** — polls CoreAudio every 2s for *per-process* microphone usage. When a known meeting app starts capturing the mic, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen).
 2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
-3. **Auto-stop** — when every app has released the microphone for 45s, the recording stops and processing begins. Rolling calls are handled: if a Teams call ends and a WhatsApp call starts straight after, it's one continuous recording. Manual recordings (started from the menu with no meeting app on the mic) never auto-stop.
+3. **Auto-stop** — a call is considered ended when no *meeting app* has held the microphone for `autoStopGraceSeconds` (default 30s); the recording then stops and processing begins. Each call becomes its own recording and transcript — a new call after the grace window gets a fresh detection prompt, even while the previous one is still transcribing. A quick handoff *within* the grace window (e.g. Teams call rolling into a WhatsApp call) stays one session, and every app that joined is listed in the note's `source:`. Unrelated mic users (dictation tools, a stray browser tab) can't keep a session alive. If the call is on an app Earwig doesn't recognise, it falls back to stopping when the mic is released entirely; manual recordings with nothing on the mic never auto-stop.
 4. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer` on older systems). Audio never leaves your Mac. Transcription runs in the background, so back-to-back meetings are detected while the previous one is still processing.
 5. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
@@ -66,13 +66,15 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
   "notesFolder": "/Users/you/MeetingNotes",
   "audioFolder": "/Users/you/MeetingNotes/audio",
   "keepAudio": true,
-  "localeIdentifier": "en-GB"
+  "localeIdentifier": "en-GB",
+  "autoStopGraceSeconds": 30
 }
 ```
 
 - `notesFolder` — where transcript markdown files are written; point your downstream tooling here.
 - `keepAudio` — set `false` to delete the merged `.m4a` after a successful transcription.
 - `localeIdentifier` — speech recognition language (defaults to your system locale).
+- `autoStopGraceSeconds` — how long a call must be off the microphone before the recording auto-stops (default 30). Raise it if flaky network reconnects split your meetings; lower it for snappier splits between back-to-back calls.
 
 ## Menu bar
 
