@@ -8,7 +8,10 @@ final class RecordPrompt {
 
     var isVisible: Bool { panel != nil }
 
-    func show(apps: [String], onRecord: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    func show(
+        apps: [String], meetingTitle: String? = nil,
+        onRecord: @escaping () -> Void, onDismiss: @escaping () -> Void
+    ) {
         dismiss()
 
         let width: CGFloat = 320
@@ -34,12 +37,19 @@ final class RecordPrompt {
         icon.contentTintColor = .systemRed
         content.addSubview(icon)
 
-        let title = NSTextField(labelWithString: "Meeting detected")
+        // With a derived meeting title, lead with it; the generic header
+        // becomes the secondary line.
+        let title = NSTextField(labelWithString: meetingTitle ?? "Meeting detected")
         title.font = .boldSystemFont(ofSize: 14)
+        title.lineBreakMode = .byTruncatingTail
+        title.toolTip = meetingTitle
         title.frame = NSRect(x: 48, y: height - 44, width: width - 60, height: 20)
         content.addSubview(title)
 
-        let detail = NSTextField(labelWithString: apps.joined(separator: ", "))
+        let detailText = meetingTitle == nil
+            ? apps.joined(separator: ", ")
+            : "Meeting detected — " + apps.joined(separator: ", ")
+        let detail = NSTextField(labelWithString: detailText)
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail

@@ -170,13 +170,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private func meetingDetected(apps: [String]) {
         guard !recorder.isRecording, !prompt.isVisible else { return }
         currentMeetingApps = apps
+
+        // Derive the meeting title from the call window (needs Accessibility).
+        let candidates = WindowMonitor.callWindowCandidates()
+        let title = (candidates.first { apps.contains($0.app) } ?? candidates.first)?.title
+        pendingMeetingTitle = title
+        if let title { Log.info("Detected meeting title: \(title)") }
+
         NSSound(named: "Glass")?.play()
-        prompt.show(apps: apps) { [weak self] in
+        prompt.show(apps: apps, meetingTitle: title) { [weak self] in
             self?.startRecording()
-        } onDismiss: {
+        } onDismiss: { [weak self] in
+            self?.pendingMeetingTitle = nil
             Log.info("Prompt dismissed")
         }
     }
+
+    private var pendingMeetingTitle: String?
 
     @objc private func simulateMeeting() {
         let apps = detector.runningMeetingApps()
@@ -204,8 +214,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 sawMeetingOnMic = false
                 sawAnyAppOnMic = false
                 meetingSilentTicks = 0
+                // Seed with the title captured at prompt time, so it survives
+                // even if the call window closes before the first watch tick.
                 sessionWindowTitles = []
-                sessionMeetingTitle = nil
+                sessionMeetingTitle = pendingMeetingTitle
+                if let pendingMeetingTitle { sessionWindowTitles.insert(pendingMeetingTitle) }
+                pendingMeetingTitle = nil
                 autoStopTimer = Timer.scheduledTimer(
                     withTimeInterval: TimeInterval(autoStopTickSeconds), repeats: true
                 ) { [weak self] _ in
