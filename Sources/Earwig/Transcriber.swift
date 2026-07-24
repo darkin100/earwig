@@ -22,31 +22,47 @@ enum Transcriber {
         }
     }
 
+    struct Output {
+        let text: String
+        /// Number of distinct speakers found by diarization; nil if diarization
+        /// was disabled, failed, or the engine produced no timestamps.
+        let speakerCount: Int?
+    }
+
     static func transcribe(
-        audioURL: URL, localeIdentifier: String, whisperModel: String = "large-v3-v20240930_turbo"
-    ) async throws -> String {
+        audioURL: URL, localeIdentifier: String,
+        whisperModel: String = "large-v3-v20240930_turbo",
+        diarize: Bool = true
+    ) async throws -> Output {
         let locale = Locale(identifier: localeIdentifier)
 
         if whisperModel.lowercased() != "apple" {
             do {
-                let text = try await transcribeWithWhisper(
-                    audioURL: audioURL, locale: locale, model: whisperModel)
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+                let output = try await transcribeWithWhisper(
+                    audioURL: audioURL, locale: locale, model: whisperModel, diarize: diarize)
+                if !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return output
+                }
                 Log.info("Whisper produced no text; falling back to Apple speech")
             } catch {
                 Log.info("WhisperKit failed (\(error)); falling back to Apple speech")
             }
         }
 
+        // Apple fallback engines give no usable per-segment timestamps, so
+        // speaker attribution is Whisper-only.
         if #available(macOS 26.0, *) {
             do {
                 let text = try await transcribeWithAnalyzer(audioURL: audioURL, locale: locale)
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return Output(text: text, speakerCount: nil)
+                }
             } catch {
                 Log.info("SpeechAnalyzer failed (\(error)); falling back to SFSpeechRecognizer")
             }
         }
-        return try await transcribeLegacy(audioURL: audioURL, locale: locale)
+        let text = try await transcribeLegacy(audioURL: audioURL, locale: locale)
+        return Output(text: text, speakerCount: nil)
     }
 
     // MARK: Whisper via WhisperKit
@@ -83,24 +99,85 @@ enum Transcriber {
     }
 
     private static func transcribeWithWhisper(
-        audioURL: URL, locale: Locale, model: String
-    ) async throws -> String {
+        audioURL: URL, locale: Locale, model: String, diarize: Bool
+    ) async throws -> Output {
         let pipeline = try await whisperPipeline(model: model)
 
         var options = DecodingOptions()
         options.task = .transcribe
         options.chunkingStrategy = .vad
+        options.skipSpecialTokens = true
         if let language = locale.language.languageCode?.identifier {
             options.language = language
         }
 
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)
-        let text = results.map(\.text)
+        let plainText = results.map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw TranscriberError.empty }
-        return text
+        guard !plainText.isEmpty else { throw TranscriberError.empty }
+
+        guard diarize else { return Output(text: plainText, speakerCount: nil) }
+
+        // Attribute Whisper's timestamped segments to diarized speakers.
+        // Any diarization failure degrades to the plain transcript.
+        do {
+            let speakerSegments = try await Diarizer.diarize(audioURL: audioURL)
+            guard !speakerSegments.isEmpty else {
+                return Output(text: plainText, speakerCount: nil)
+            }
+            let whisperSegments = results
+                .flatMap(\.segments)
+                .map { (start: Double($0.start), end: Double($0.end),
+                        text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                .filter { !$0.text.isEmpty }
+                .sorted { $0.start < $1.start }
+            guard !whisperSegments.isEmpty else {
+                return Output(text: plainText, speakerCount: nil)
+            }
+
+            let speakerCount = Set(speakerSegments.map(\.speaker)).count
+            let attributed = attributedTranscript(
+                whisperSegments: whisperSegments, speakerSegments: speakerSegments)
+            return Output(text: attributed, speakerCount: speakerCount)
+        } catch {
+            Log.info("Diarization failed (\(error)); writing unattributed transcript")
+            return Output(text: plainText, speakerCount: nil)
+        }
+    }
+
+    /// Labels each transcript segment with the speaker whose diarized speech
+    /// overlaps it most, then folds consecutive same-speaker segments into
+    /// speaker turns.
+    private static func attributedTranscript(
+        whisperSegments: [(start: Double, end: Double, text: String)],
+        speakerSegments: [Diarizer.SpeakerSegment]
+    ) -> String {
+        func dominantSpeaker(from start: Double, to end: Double) -> String? {
+            var overlaps: [String: Double] = [:]
+            for segment in speakerSegments {
+                let overlap = min(end, segment.end) - max(start, segment.start)
+                if overlap > 0 {
+                    overlaps[segment.speaker, default: 0] += overlap
+                }
+            }
+            return overlaps.max(by: { $0.value < $1.value })?.key
+        }
+
+        var turns: [(speaker: String, text: String)] = []
+        var lastSpeaker = "Speaker 1"
+        for segment in whisperSegments {
+            let speaker = dominantSpeaker(from: segment.start, to: segment.end) ?? lastSpeaker
+            lastSpeaker = speaker
+            if var last = turns.last, last.speaker == speaker {
+                last.text += " " + segment.text
+                turns[turns.count - 1] = last
+            } else {
+                turns.append((speaker: speaker, text: segment.text))
+            }
+        }
+        return turns.map { "**\($0.speaker):** \($0.text)" }.joined(separator: "\n\n")
     }
 
     // MARK: macOS 26 SpeechAnalyzer

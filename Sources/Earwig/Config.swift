@@ -11,9 +11,12 @@ struct Config: Codable {
     // WhisperKit model variant for transcription, or "apple" to use the
     // built-in macOS speech model instead. Optional for config back-compat.
     var whisperModel: String?
+    // Label transcript turns with "Speaker N" via on-device diarization.
+    var enableDiarization: Bool?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
     var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }
+    var effectiveDiarization: Bool { enableDiarization ?? true }
 
     static var defaultConfig: Config {
         Config(
@@ -22,7 +25,8 @@ struct Config: Codable {
             keepAudio: true,
             localeIdentifier: Locale.current.identifier,
             autoStopGraceSeconds: 30,
-            whisperModel: "large-v3-v20240930_turbo"
+            whisperModel: "large-v3-v20240930_turbo",
+            enableDiarization: true
         )
     }
 

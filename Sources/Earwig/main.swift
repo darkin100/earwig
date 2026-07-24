@@ -15,15 +15,19 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
     Task {
         do {
             print("Transcribing \(audioURL.path)...")
-            let transcript = try await Transcriber.transcribe(
+            let result = try await Transcriber.transcribe(
                 audioURL: audioURL, localeIdentifier: config.localeIdentifier,
-                whisperModel: config.effectiveWhisperModel)
+                whisperModel: config.effectiveWhisperModel,
+                diarize: config.effectiveDiarization)
+            let transcript = result.text
+            if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")
             let notes = TranscriptNote.markdown(
                 transcript: transcript,
                 meetingDate: Date(),
                 duration: 0,
-                apps: ["manual --process run"])
+                apps: ["manual --process run"],
+                speakerCount: result.speakerCount)
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL

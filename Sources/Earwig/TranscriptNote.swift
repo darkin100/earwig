@@ -10,7 +10,8 @@ enum TranscriptNote {
         duration: TimeInterval,
         apps: [String],
         title: String? = nil,
-        windowTitles: [String] = []
+        windowTitles: [String] = [],
+        speakerCount: Int? = nil
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -25,6 +26,9 @@ enum TranscriptNote {
         duration_minutes: \(minutes)
         source: \(apps.isEmpty ? "manual recording" : apps.joined(separator: ", "))
         """
+        if let speakerCount {
+            frontmatter += "\nspeakers: \(speakerCount)"
+        }
         if !windowTitles.isEmpty {
             frontmatter += "\nwindow_titles:"
             for windowTitle in windowTitles {

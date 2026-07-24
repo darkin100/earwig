@@ -336,16 +336,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         stamp: String, config cfg: Config
     ) async {
         do {
-            let transcript = try await Transcriber.transcribe(
+            let result = try await Transcriber.transcribe(
                 audioURL: audioURL, localeIdentifier: cfg.localeIdentifier,
-                whisperModel: cfg.effectiveWhisperModel)
+                whisperModel: cfg.effectiveWhisperModel,
+                diarize: cfg.effectiveDiarization)
             let notes = TranscriptNote.markdown(
-                transcript: transcript,
+                transcript: result.text,
                 meetingDate: startedAt,
                 duration: duration,
                 apps: apps,
                 title: meetingTitle,
-                windowTitles: windowTitles)
+                windowTitles: windowTitles,
+                speakerCount: result.speakerCount)
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
             if !cfg.keepAudio {
