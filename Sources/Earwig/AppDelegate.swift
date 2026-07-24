@@ -106,14 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         openNotes.target = self
         menu.addItem(openNotes)
 
-        let openConfig = NSMenuItem(title: "Open Config File", action: #selector(openConfigFile), keyEquivalent: "")
-        openConfig.target = self
-        menu.addItem(openConfig)
-
-        let openLog = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
-        openLog.target = self
-        menu.addItem(openLog)
-
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Earwig", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
@@ -414,14 +406,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
     @objc private func openNotesFolder() {
         NSWorkspace.shared.open(config.notesFolderURL)
-    }
-
-    @objc private func openConfigFile() {
-        NSWorkspace.shared.open(Config.configURL)
-    }
-
-    @objc private func openLog() {
-        NSWorkspace.shared.open(Log.logURL)
     }
 
     @objc private func openLastNote() {

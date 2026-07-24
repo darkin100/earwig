@@ -112,6 +112,9 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button("Open Log") {
+                        NSWorkspace.shared.open(Log.logURL)
+                    }
                 }
             }
         }
