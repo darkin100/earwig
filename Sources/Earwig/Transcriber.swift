@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import Foundation
 import Speech
 import WhisperKit
@@ -91,6 +92,10 @@ enum Transcriber {
         let config = WhisperKitConfig(
             model: model,
             downloadBase: modelsDir,
+            // CPU + Neural Engine only: the default mel stage uses the GPU,
+            // which starves video rendering when the user is already on the
+            // next call while this one transcribes.
+            computeOptions: ModelComputeOptions(melCompute: .cpuAndNeuralEngine),
             verbose: false,
             logLevel: .error,
             prewarm: true,

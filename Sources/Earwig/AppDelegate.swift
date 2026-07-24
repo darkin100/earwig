@@ -143,13 +143,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         if recorder.isRecording {
             let secs = Int(recorder.elapsed)
             var title = String(format: "Recording %02d:%02d", secs / 60, secs % 60)
-            if activePipelines > 0 { title += " · transcribing previous" }
+            if activePipelines > 0 { title += " · transcription queued" }
             statusMenuItem.title = title
             recordMenuItem.title = "Stop Recording & Transcribe"
         } else if activePipelines > 0 {
-            statusMenuItem.title = activePipelines == 1
-                ? "Transcribing…"
-                : "Transcribing \(activePipelines) recordings…"
+            if pipelinesDeferred {
+                statusMenuItem.title = "Transcription queued — waiting for meeting to end"
+            } else {
+                statusMenuItem.title = activePipelines == 1
+                    ? "Transcribing…"
+                    : "Transcribing \(activePipelines) recordings…"
+            }
             recordMenuItem.title = "Start Recording"
         } else {
             statusMenuItem.title = "Idle — waiting for meetings"
@@ -336,8 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             updateIcon(); updateStatusLine()
 
             let cfg = config
-            pipelineChain = Task { [previous = pipelineChain] in
+            pipelineChain = Task(priority: .utility) { [previous = pipelineChain] in
                 await previous.value
+                await self.waitUntilNoLiveMeeting()
                 await self.transcribeAndWrite(
                     audioURL: audioURL, startedAt: startedAt, duration: duration,
                     apps: apps, meetingTitle: meetingTitle, windowTitles: windowTitles,
@@ -345,6 +350,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             }
         }
     }
+
+    /// Whisper + diarization are compute-heavy; running them while the user is
+    /// already on the next call can starve the video stream. Recordings are
+    /// safe on disk, so processing simply waits until no meeting is live.
+    private func waitUntilNoLiveMeeting() async {
+        var deferred = false
+        while true {
+            let recording = await MainActor.run { recorder.isRecording }
+            if !recording && MeetingDetector.meetingAppsUsingMic().isEmpty { break }
+            if !deferred {
+                deferred = true
+                Log.info("Deferring transcription until the live meeting ends")
+                await MainActor.run {
+                    pipelinesDeferred = true
+                    updateStatusLine()
+                }
+            }
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+        }
+        if deferred {
+            // Settle briefly so a just-ended recording finishes merging first.
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            await MainActor.run {
+                pipelinesDeferred = false
+                updateStatusLine()
+            }
+        }
+    }
+
+    private var pipelinesDeferred = false
 
     private func transcribeAndWrite(
         audioURL: URL, startedAt: Date, duration: TimeInterval,
