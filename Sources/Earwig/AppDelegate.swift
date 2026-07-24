@@ -60,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             self.config = Config.load()
             self.config.ensureFolders()
         }
+        meetingNotes.onStop = { [weak self] in
+            guard let self, self.recorder.isRecording else { return }
+            self.stopRecordingAndProcess()
+        }
         detector.start()
         if !WindowMonitor.isTrusted {
             Log.info("Accessibility not granted — meeting titles and window-close detection disabled")

@@ -8,12 +8,18 @@ final class MeetingNotesController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private let model = MeetingNotesModel()
 
+    /// Invoked by the sidebar's Stop button; the AppDelegate wires this to
+    /// "stop recording and process".
+    var onStop: (() -> Void)?
+
     var isOpen: Bool { panel?.isVisible ?? false }
 
     func open(meetingTitle: String?) {
         model.title = meetingTitle ?? "Meeting notes"
         if panel == nil {
-            let hosting = NSHostingView(rootView: MeetingNotesView(model: model))
+            let hosting = NSHostingView(rootView: MeetingNotesView(model: model) { [weak self] in
+                self?.onStop?()
+            })
             let panel = NSPanel(
                 contentRect: .zero,
                 styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .utilityWindow],
@@ -60,6 +66,7 @@ final class MeetingNotesModel: ObservableObject {
 
 struct MeetingNotesView: View {
     @ObservedObject var model: MeetingNotesModel
+    var onStop: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -70,6 +77,14 @@ struct MeetingNotesView: View {
                 Text(model.title)
                     .font(.headline)
                     .lineLimit(2)
+                Spacer()
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.small)
+                .help("Stop recording and transcribe")
             }
             .padding(.top, 10)
 
