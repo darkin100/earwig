@@ -8,6 +8,7 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
     func menuWillOpen(_ menu: NSMenu) {
         windowAccessMenuItem?.isHidden = WindowMonitor.isTrusted
+        notesMenuItem?.isHidden = !recorder.isRecording
         updateStatusLine()
     }
 
@@ -16,11 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private let prompt = RecordPrompt()
     private let recorder = Recorder()
     private let settings = SettingsWindowController()
+    private let meetingNotes = MeetingNotesController()
     private var config = Config.load()
 
     private var currentMeetingApps: [String] = []
     private var statusMenuItem: NSMenuItem!
     private var recordMenuItem: NSMenuItem!
+    private var notesMenuItem: NSMenuItem!
     private var lastNoteMenuItem: NSMenuItem!
     private var elapsedTimer: Timer?
     // Transcriptions run in the background, serialized so concurrent
@@ -84,6 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         recordMenuItem = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: "r")
         recordMenuItem.target = self
         menu.addItem(recordMenuItem)
+
+        notesMenuItem = NSMenuItem(title: "Show Meeting Notes", action: #selector(showMeetingNotes), keyEquivalent: "n")
+        notesMenuItem.target = self
+        notesMenuItem.isHidden = true
+        menu.addItem(notesMenuItem)
 
         let simulate = NSMenuItem(title: "Simulate Meeting Detection", action: #selector(simulateMeeting), keyEquivalent: "")
         simulate.target = self
@@ -216,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 sessionMeetingTitle = pendingMeetingTitle
                 if let pendingMeetingTitle { sessionWindowTitles.insert(pendingMeetingTitle) }
                 pendingMeetingTitle = nil
+                meetingNotes.open(meetingTitle: sessionMeetingTitle)
                 autoStopTimer = Timer.scheduledTimer(
                     withTimeInterval: TimeInterval(autoStopTickSeconds), repeats: true
                 ) { [weak self] _ in
@@ -312,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         let windowTitles = sessionWindowTitles.sorted()
         let startedAt = recorder.startedAt ?? Date()
         let duration = recorder.elapsed
+        let userNotes = meetingNotes.closeAndCollect()
         elapsedTimer?.invalidate()
         elapsedTimer = nil
         autoStopTimer?.invalidate()
@@ -319,6 +329,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
         let stamp = Self.fileStamp(for: startedAt)
         let audioURL = config.audioFolderURL.appendingPathComponent("meeting-\(stamp).m4a")
+
+        // Stash live notes to disk right away — a transcription failure later
+        // must not lose what the user typed. Removed after the note is written.
+        let notesStashURL = config.audioFolderURL.appendingPathComponent("meeting-\(stamp)-livenotes.txt")
+        if !userNotes.isEmpty {
+            try? userNotes.write(to: notesStashURL, atomically: true, encoding: .utf8)
+        }
 
         Task { @MainActor in
             do {
@@ -346,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 await self.transcribeAndWrite(
                     audioURL: audioURL, startedAt: startedAt, duration: duration,
                     apps: apps, meetingTitle: meetingTitle, windowTitles: windowTitles,
+                    userNotes: userNotes, notesStashURL: notesStashURL,
                     stamp: stamp, config: cfg)
             }
         }
@@ -384,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private func transcribeAndWrite(
         audioURL: URL, startedAt: Date, duration: TimeInterval,
         apps: [String], meetingTitle: String?, windowTitles: [String],
+        userNotes: String, notesStashURL: URL,
         stamp: String, config cfg: Config
     ) async {
         do {
@@ -405,9 +424,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 speakerCount: result.speakerCount,
                 speakerSamples: result.speakerSamples.map {
                     ($0.speaker, Self.notePath(for: $0.url, notesFolder: cfg.notesFolderURL))
-                })
+                },
+                userNotes: userNotes)
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
+            try? FileManager.default.removeItem(at: notesStashURL)
             if !cfg.keepAudio {
                 try? FileManager.default.removeItem(at: audioURL)
             }
@@ -452,6 +473,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
     @objc private func openSettings() {
         settings.show()
+    }
+
+    @objc private func showMeetingNotes() {
+        guard recorder.isRecording else { return }
+        meetingNotes.open(meetingTitle: sessionMeetingTitle)
     }
 
     @objc private func openNotesFolder() {

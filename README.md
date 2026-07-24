@@ -99,6 +99,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 ## Menu bar
 
 - **Start/Stop Recording** (⌘R) — manual control; the icon is a red dot while recording, a waveform while transcribing.
+- **Show Meeting Notes** (⌘N, while recording) — reopens the live notes sidebar if you closed it. The sidebar docks to the right edge when recording starts; anything you type is added to the transcript note under *"Notes (taken live during the meeting)"* (frontmatter: `has_live_notes: true`) and is stashed to a `-livenotes.txt` file next to the audio until the note is safely written.
 - **Simulate Meeting Detection** — test the prompt without a real meeting.
 - **Settings…** (⌘,) — folders, keep-audio, transcription model, language, diarization, auto-stop grace, and an Open Log button, in a native settings window. (The JSON config below remains the source of truth for anything exotic.)
 - **Open Notes Folder**

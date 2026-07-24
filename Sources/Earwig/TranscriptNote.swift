@@ -12,7 +12,8 @@ enum TranscriptNote {
         title: String? = nil,
         windowTitles: [String] = [],
         speakerCount: Int? = nil,
-        speakerSamples: [(speaker: String, path: String)] = []
+        speakerSamples: [(speaker: String, path: String)] = [],
+        userNotes: String = ""
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -42,6 +43,9 @@ enum TranscriptNote {
                 frontmatter += "\n  - \(yamlQuoted(windowTitle))"
             }
         }
+        if !userNotes.isEmpty {
+            frontmatter += "\nhas_live_notes: true"
+        }
         frontmatter += """
 
         generated_by: earwig
@@ -49,10 +53,18 @@ enum TranscriptNote {
         ---
         """
 
+        let notesSection = userNotes.isEmpty ? "" : """
+
+
+        ## Notes (taken live during the meeting)
+
+        \(userNotes)
+        """
+
         return """
         \(frontmatter)
 
-        # \(heading)
+        # \(heading)\(notesSection)
 
         ## Transcript
 
