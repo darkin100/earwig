@@ -358,7 +358,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 audioURL: audioURL, localeIdentifier: cfg.localeIdentifier,
                 whisperModel: cfg.effectiveWhisperModel,
                 diarize: cfg.effectiveDiarization,
-                sampleClipsDir: samplesDir)
+                sampleClipsDir: samplesDir,
+                voiceMatchThreshold: cfg.effectiveVoiceMatchThreshold)
             let notes = TranscriptNote.markdown(
                 transcript: result.text,
                 meetingDate: startedAt,

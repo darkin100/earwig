@@ -35,7 +35,8 @@ enum Transcriber {
         audioURL: URL, localeIdentifier: String,
         whisperModel: String = "large-v3-v20240930_turbo",
         diarize: Bool = true,
-        sampleClipsDir: URL? = nil
+        sampleClipsDir: URL? = nil,
+        voiceMatchThreshold: Double = 0.6
     ) async throws -> Output {
         let locale = Locale(identifier: localeIdentifier)
 
@@ -43,7 +44,8 @@ enum Transcriber {
             do {
                 let output = try await transcribeWithWhisper(
                     audioURL: audioURL, locale: locale, model: whisperModel,
-                    diarize: diarize, sampleClipsDir: sampleClipsDir)
+                    diarize: diarize, sampleClipsDir: sampleClipsDir,
+                    voiceMatchThreshold: voiceMatchThreshold)
                 if !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return output
                 }
@@ -103,7 +105,8 @@ enum Transcriber {
     }
 
     private static func transcribeWithWhisper(
-        audioURL: URL, locale: Locale, model: String, diarize: Bool, sampleClipsDir: URL?
+        audioURL: URL, locale: Locale, model: String, diarize: Bool,
+        sampleClipsDir: URL?, voiceMatchThreshold: Double
     ) async throws -> Output {
         let pipeline = try await whisperPipeline(model: model)
 
@@ -127,9 +130,31 @@ enum Transcriber {
         // Attribute Whisper's timestamped segments to diarized speakers.
         // Any diarization failure degrades to the plain transcript.
         do {
-            let speakerSegments = try await Diarizer.diarize(audioURL: audioURL)
-            guard !speakerSegments.isEmpty else {
+            let outcome = try await Diarizer.diarize(audioURL: audioURL)
+            guard !outcome.segments.isEmpty else {
                 return Output(text: plainText, speakerCount: nil)
+            }
+
+            // Match each voice against the speaker catalogue: recognised and
+            // named voices appear by name; unrecognised ones stay "Speaker N".
+            var displayNames: [String: String] = [:]
+            var matchedIDs: [String: UUID] = [:]
+            for (label, embedding) in outcome.meanEmbeddings {
+                if let match = SpeakerCatalog.shared.bestMatch(
+                    embedding: embedding, threshold: voiceMatchThreshold) {
+                    matchedIDs[label] = match.id
+                    if let name = match.name, !name.isEmpty {
+                        displayNames[label] = name
+                        Log.info("Recognised \(label) as \(name) (similarity \(String(format: "%.2f", match.similarity)))")
+                    } else {
+                        Log.info("\(label) matches an uncatalogued voice heard before (similarity \(String(format: "%.2f", match.similarity)))")
+                    }
+                }
+            }
+            let speakerSegments = outcome.segments.map { segment in
+                displayNames[segment.speaker].map {
+                    Diarizer.SpeakerSegment(speaker: $0, start: segment.start, end: segment.end)
+                } ?? segment
             }
             let whisperSegments = results
                 .flatMap(\.segments)
@@ -148,6 +173,23 @@ enum Transcriber {
             if let sampleClipsDir {
                 samples = await Diarizer.exportSamples(
                     from: audioURL, segments: speakerSegments, to: sampleClipsDir)
+            }
+
+            // Catalogue upkeep: refresh matched voices, register new ones so
+            // they show up in Settings > Speaker Identification for naming.
+            let stamp = DateFormatter()
+            stamp.dateFormat = "yyyy-MM-dd HH:mm"
+            for (label, embedding) in outcome.meanEmbeddings {
+                if let id = matchedIDs[label] {
+                    SpeakerCatalog.shared.touch(id: id)
+                } else if let clip = samples.first(where: {
+                    $0.speaker == (displayNames[label] ?? label)
+                })?.url {
+                    SpeakerCatalog.shared.register(
+                        context: "\(label) · meeting \(stamp.string(from: Date()))",
+                        embedding: embedding,
+                        sampleClip: clip)
+                }
             }
             return Output(text: attributed, speakerCount: speakerCount, speakerSamples: samples)
         } catch {

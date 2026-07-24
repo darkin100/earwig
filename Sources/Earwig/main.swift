@@ -22,7 +22,8 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
                 audioURL: audioURL, localeIdentifier: config.localeIdentifier,
                 whisperModel: config.effectiveWhisperModel,
                 diarize: config.effectiveDiarization,
-                sampleClipsDir: samplesDir)
+                sampleClipsDir: samplesDir,
+                voiceMatchThreshold: config.effectiveVoiceMatchThreshold)
             let transcript = result.text
             if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")

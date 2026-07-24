@@ -18,6 +18,8 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
    speaker_samples:
      "Speaker 1": "audio/meeting-2026-06-11-0930-speakers/speaker-1.m4a"
    ```
+
+   **Speaker catalogue** — every new voice is also added to a local registry (Settings → **Speaker Identification…**) with its sample clip and a voice embedding. Listen to a clip, name the voice, and future meetings label that speaker by name automatically (cosine match against the stored embedding, `voiceMatchThreshold`, default 0.6). Voices you don't recognise can be deleted so the catalogue doesn't fill with strangers; repeat encounters with the same unnamed voice are matched, not re-added. Everything (clips, embeddings, names) stays in `~/Library/Application Support/Earwig/`.
 7. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
 ```markdown
@@ -81,7 +83,8 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
   "localeIdentifier": "en-GB",
   "autoStopGraceSeconds": 30,
   "whisperModel": "large-v3-v20240930_turbo",
-  "enableDiarization": true
+  "enableDiarization": true,
+  "voiceMatchThreshold": 0.6
 }
 ```
 
@@ -90,6 +93,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 - `localeIdentifier` — speech recognition language (defaults to your system locale).
 - `autoStopGraceSeconds` — how long a call must be off the microphone before the recording auto-stops (default 30). Raise it if flaky network reconnects split your meetings; lower it for snappier splits between back-to-back calls.
 - `enableDiarization` — label transcript turns with anonymous `Speaker N` voices (default `true`); set `false` for a flat transcript.
+- `voiceMatchThreshold` — how similar a voice must be to a catalogued speaker to count as the same person (default 0.6; raise it if different people get merged, lower it if the same person keeps appearing as new).
 - `whisperModel` — WhisperKit model variant (default `large-v3-v20240930_turbo`). Smaller/faster options include `large-v3-v20240930_626MB` or `distil-large-v3`; set to `"apple"` to skip Whisper and use the built-in macOS speech model.
 
 ## Menu bar

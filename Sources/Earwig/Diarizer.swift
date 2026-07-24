@@ -13,11 +13,18 @@ enum Diarizer {
         let end: Double
     }
 
+    struct Outcome {
+        let segments: [SpeakerSegment]
+        /// Duration-weighted mean voice embedding per speaker label — the
+        /// fingerprint used to match voices against the speaker catalogue.
+        let meanEmbeddings: [String: [Float]]
+    }
+
     // Models load once per app run; the transcription pipeline is serialized
     // so a single cached manager is safe.
     private static var manager: OfflineDiarizerManager?
 
-    static func diarize(audioURL: URL) async throws -> [SpeakerSegment] {
+    static func diarize(audioURL: URL) async throws -> Outcome {
         let mgr: OfflineDiarizerManager
         if let cached = manager {
             mgr = cached
@@ -37,21 +44,41 @@ enum Diarizer {
 
         let result = try await mgr.process(audioURL)
 
-        // Renumber FluidAudio's speaker IDs by order of first appearance.
+        // Renumber FluidAudio's speaker IDs by order of first appearance, and
+        // accumulate a duration-weighted mean embedding per speaker.
         var order: [String: Int] = [:]
         var segments: [SpeakerSegment] = []
+        var weightedSums: [String: [Float]] = [:]
         for segment in result.segments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
             if order[segment.speakerId] == nil {
                 order[segment.speakerId] = order.count + 1
             }
+            let label = "Speaker \(order[segment.speakerId]!)"
             segments.append(SpeakerSegment(
-                speaker: "Speaker \(order[segment.speakerId]!)",
+                speaker: label,
                 start: Double(segment.startTimeSeconds),
                 end: Double(segment.endTimeSeconds)
             ))
+            let weight = max(0.1, segment.endTimeSeconds - segment.startTimeSeconds)
+            if !segment.embedding.isEmpty {
+                var sum = weightedSums[label] ?? [Float](repeating: 0, count: segment.embedding.count)
+                if sum.count == segment.embedding.count {
+                    for i in 0..<sum.count { sum[i] += segment.embedding[i] * weight }
+                    weightedSums[label] = sum
+                }
+            }
+        }
+        // Normalize to unit length (cosine similarity ignores scale, but unit
+        // vectors keep the stored JSON well-behaved).
+        var meanEmbeddings: [String: [Float]] = [:]
+        for (label, sum) in weightedSums {
+            let norm = sum.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+            if norm > 0 {
+                meanEmbeddings[label] = sum.map { $0 / norm }
+            }
         }
         Log.info("Diarization found \(order.count) speaker(s) across \(segments.count) segments")
-        return segments
+        return Outcome(segments: segments, meanEmbeddings: meanEmbeddings)
     }
 
     struct SpeakerSample {

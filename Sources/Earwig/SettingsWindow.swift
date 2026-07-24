@@ -43,6 +43,8 @@ struct SettingsView: View {
     @State private var whisperModel: String
     @State private var enableDiarization: Bool
     @State private var saved = false
+    @State private var unidentifiedCount = SpeakerCatalog.shared.all()
+        .filter { ($0.name ?? "").isEmpty }.count
 
     private static let modelChoices: [(id: String, label: String)] = [
         ("large-v3-v20240930_turbo", "Whisper large-v3 turbo (best, ~1.5 GB)"),
@@ -93,6 +95,20 @@ struct SettingsView: View {
                     Text("Diarization needs the Whisper engine.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Speakers") {
+                HStack {
+                    Button("Speaker Identification…") {
+                        SpeakersWindowController.shared.show()
+                    }
+                    Spacer()
+                    if unidentifiedCount > 0 {
+                        Text("\(unidentifiedCount) voice\(unidentifiedCount == 1 ? "" : "s") to identify")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 

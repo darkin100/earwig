@@ -13,10 +13,13 @@ struct Config: Codable {
     var whisperModel: String?
     // Label transcript turns with "Speaker N" via on-device diarization.
     var enableDiarization: Bool?
+    // Cosine similarity a voice must reach to match a catalogued speaker.
+    var voiceMatchThreshold: Double?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
     var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }
     var effectiveDiarization: Bool { enableDiarization ?? true }
+    var effectiveVoiceMatchThreshold: Double { voiceMatchThreshold ?? 0.6 }
 
     static var defaultConfig: Config {
         Config(
@@ -26,7 +29,8 @@ struct Config: Codable {
             localeIdentifier: Locale.current.identifier,
             autoStopGraceSeconds: 30,
             whisperModel: "large-v3-v20240930_turbo",
-            enableDiarization: true
+            enableDiarization: true,
+            voiceMatchThreshold: 0.6
         )
     }
 
