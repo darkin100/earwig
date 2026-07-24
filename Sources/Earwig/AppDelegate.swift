@@ -352,10 +352,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         stamp: String, config cfg: Config
     ) async {
         do {
+            let samplesDir = cfg.audioFolderURL.appendingPathComponent(
+                "meeting-\(stamp)-speakers", isDirectory: true)
             let result = try await Transcriber.transcribe(
                 audioURL: audioURL, localeIdentifier: cfg.localeIdentifier,
                 whisperModel: cfg.effectiveWhisperModel,
-                diarize: cfg.effectiveDiarization)
+                diarize: cfg.effectiveDiarization,
+                sampleClipsDir: samplesDir)
             let notes = TranscriptNote.markdown(
                 transcript: result.text,
                 meetingDate: startedAt,
@@ -363,7 +366,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 apps: apps,
                 title: meetingTitle,
                 windowTitles: windowTitles,
-                speakerCount: result.speakerCount)
+                speakerCount: result.speakerCount,
+                speakerSamples: result.speakerSamples.map {
+                    ($0.speaker, Self.notePath(for: $0.url, notesFolder: cfg.notesFolderURL))
+                })
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
             if !cfg.keepAudio {
@@ -391,6 +397,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     private var lastNoteURL: URL?
+
+    /// Sample-clip paths are written relative to the notes folder when they
+    /// live inside it (portable for downstream tooling), absolute otherwise.
+    static func notePath(for url: URL, notesFolder: URL) -> String {
+        let prefix = notesFolder.standardizedFileURL.path + "/"
+        let path = url.standardizedFileURL.path
+        return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
+    }
 
     private static func fileStamp(for date: Date) -> String {
         let f = DateFormatter()

@@ -27,19 +27,23 @@ enum Transcriber {
         /// Number of distinct speakers found by diarization; nil if diarization
         /// was disabled, failed, or the engine produced no timestamps.
         let speakerCount: Int?
+        /// One short clip per speaker for human identification.
+        var speakerSamples: [Diarizer.SpeakerSample] = []
     }
 
     static func transcribe(
         audioURL: URL, localeIdentifier: String,
         whisperModel: String = "large-v3-v20240930_turbo",
-        diarize: Bool = true
+        diarize: Bool = true,
+        sampleClipsDir: URL? = nil
     ) async throws -> Output {
         let locale = Locale(identifier: localeIdentifier)
 
         if whisperModel.lowercased() != "apple" {
             do {
                 let output = try await transcribeWithWhisper(
-                    audioURL: audioURL, locale: locale, model: whisperModel, diarize: diarize)
+                    audioURL: audioURL, locale: locale, model: whisperModel,
+                    diarize: diarize, sampleClipsDir: sampleClipsDir)
                 if !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return output
                 }
@@ -99,7 +103,7 @@ enum Transcriber {
     }
 
     private static func transcribeWithWhisper(
-        audioURL: URL, locale: Locale, model: String, diarize: Bool
+        audioURL: URL, locale: Locale, model: String, diarize: Bool, sampleClipsDir: URL?
     ) async throws -> Output {
         let pipeline = try await whisperPipeline(model: model)
 
@@ -140,7 +144,12 @@ enum Transcriber {
             let speakerCount = Set(speakerSegments.map(\.speaker)).count
             let attributed = attributedTranscript(
                 whisperSegments: whisperSegments, speakerSegments: speakerSegments)
-            return Output(text: attributed, speakerCount: speakerCount)
+            var samples: [Diarizer.SpeakerSample] = []
+            if let sampleClipsDir {
+                samples = await Diarizer.exportSamples(
+                    from: audioURL, segments: speakerSegments, to: sampleClipsDir)
+            }
+            return Output(text: attributed, speakerCount: speakerCount, speakerSamples: samples)
         } catch {
             Log.info("Diarization failed (\(error)); writing unattributed transcript")
             return Output(text: plainText, speakerCount: nil)

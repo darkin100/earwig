@@ -1,3 +1,4 @@
+import AVFoundation
 import FluidAudio
 import Foundation
 
@@ -51,5 +52,65 @@ enum Diarizer {
         }
         Log.info("Diarization found \(order.count) speaker(s) across \(segments.count) segments")
         return segments
+    }
+
+    struct SpeakerSample {
+        let speaker: String
+        let url: URL
+    }
+
+    /// Exports one short audio clip per speaker — their longest contiguous
+    /// segment, capped at `maxSeconds` — so a human can listen and identify
+    /// who each anonymous "Speaker N" actually is.
+    static func exportSamples(
+        from audioURL: URL,
+        segments: [SpeakerSegment],
+        to directory: URL,
+        maxSeconds: Double = 15
+    ) async -> [SpeakerSample] {
+        var longest: [String: SpeakerSegment] = [:]
+        for segment in segments {
+            let current = longest[segment.speaker]
+            if current == nil || (segment.end - segment.start) > (current!.end - current!.start) {
+                longest[segment.speaker] = segment
+            }
+        }
+        guard !longest.isEmpty else { return [] }
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            Log.info("Could not create speaker samples dir: \(error)")
+            return []
+        }
+
+        // "Speaker 2" before "Speaker 10": sort numerically.
+        let ordered = longest.sorted {
+            (Int($0.key.split(separator: " ").last ?? "") ?? 0)
+                < (Int($1.key.split(separator: " ").last ?? "") ?? 0)
+        }
+
+        var samples: [SpeakerSample] = []
+        for (speaker, segment) in ordered {
+            let asset = AVURLAsset(url: audioURL)
+            guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+                continue
+            }
+            let duration = min(segment.end - segment.start, maxSeconds)
+            export.timeRange = CMTimeRange(
+                start: CMTime(seconds: segment.start, preferredTimescale: 600),
+                duration: CMTime(seconds: duration, preferredTimescale: 600))
+            let clipURL = directory.appendingPathComponent(
+                speaker.replacingOccurrences(of: " ", with: "-").lowercased() + ".m4a")
+            try? FileManager.default.removeItem(at: clipURL)
+            do {
+                try await export.export(to: clipURL, as: .m4a)
+                samples.append(SpeakerSample(speaker: speaker, url: clipURL))
+            } catch {
+                Log.info("Sample export failed for \(speaker): \(error)")
+            }
+        }
+        Log.info("Exported \(samples.count) speaker sample clip(s) to \(directory.lastPathComponent)")
+        return samples
     }
 }

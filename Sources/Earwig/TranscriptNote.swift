@@ -11,7 +11,8 @@ enum TranscriptNote {
         apps: [String],
         title: String? = nil,
         windowTitles: [String] = [],
-        speakerCount: Int? = nil
+        speakerCount: Int? = nil,
+        speakerSamples: [(speaker: String, path: String)] = []
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -28,6 +29,12 @@ enum TranscriptNote {
         """
         if let speakerCount {
             frontmatter += "\nspeakers: \(speakerCount)"
+        }
+        if !speakerSamples.isEmpty {
+            frontmatter += "\nspeaker_samples:"
+            for sample in speakerSamples {
+                frontmatter += "\n  \(yamlQuoted(sample.speaker)): \(yamlQuoted(sample.path))"
+            }
         }
         if !windowTitles.isEmpty {
             frontmatter += "\nwindow_titles:"

@@ -15,10 +15,14 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
     Task {
         do {
             print("Transcribing \(audioURL.path)...")
+            let baseName = audioURL.deletingPathExtension().lastPathComponent
+            let samplesDir = config.audioFolderURL.appendingPathComponent(
+                "\(baseName)-speakers", isDirectory: true)
             let result = try await Transcriber.transcribe(
                 audioURL: audioURL, localeIdentifier: config.localeIdentifier,
                 whisperModel: config.effectiveWhisperModel,
-                diarize: config.effectiveDiarization)
+                diarize: config.effectiveDiarization,
+                sampleClipsDir: samplesDir)
             let transcript = result.text
             if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")
@@ -27,7 +31,10 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
                 meetingDate: Date(),
                 duration: 0,
                 apps: ["manual --process run"],
-                speakerCount: result.speakerCount)
+                speakerCount: result.speakerCount,
+                speakerSamples: result.speakerSamples.map {
+                    ($0.speaker, AppDelegate.notePath(for: $0.url, notesFolder: config.notesFolderURL))
+                })
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL
