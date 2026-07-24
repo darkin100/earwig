@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private let detector = MeetingDetector()
     private let prompt = RecordPrompt()
     private let recorder = Recorder()
+    private let settings = SettingsWindowController()
     private var config = Config.load()
 
     private var currentMeetingApps: [String] = []
@@ -50,6 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
         detector.onMeetingDetected = { [weak self] apps in
             self?.meetingDetected(apps: apps)
+        }
+        settings.onSaved = { [weak self] in
+            guard let self else { return }
+            self.config = Config.load()
+            self.config.ensureFolders()
         }
         detector.start()
         if !WindowMonitor.isTrusted {
@@ -91,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         menu.addItem(windowAccessMenuItem)
 
         menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let openNotes = NSMenuItem(title: "Open Notes Folder", action: #selector(openNotesFolder), keyEquivalent: "o")
         openNotes.target = self
@@ -383,6 +393,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     // MARK: Menu actions
+
+    @objc private func openSettings() {
+        settings.show()
+    }
 
     @objc private func openNotesFolder() {
         NSWorkspace.shared.open(config.notesFolderURL)

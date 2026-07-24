@@ -90,6 +90,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 
 - **Start/Stop Recording** (⌘R) — manual control; the icon is a red dot while recording, a waveform while transcribing.
 - **Simulate Meeting Detection** — test the prompt without a real meeting.
+- **Settings…** (⌘,) — folders, keep-audio, transcription model, language, diarization, and auto-stop grace in a native settings window. (The JSON config below remains the source of truth for anything exotic.)
 - **Open Notes Folder / Config File / Log**
 
 ## Headless modes
