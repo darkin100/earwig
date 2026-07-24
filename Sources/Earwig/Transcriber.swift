@@ -1,9 +1,12 @@
 import AVFoundation
 import Foundation
 import Speech
+import WhisperKit
 
-/// On-device speech-to-text. Prefers the macOS 26 SpeechAnalyzer API
-/// (designed for long-form audio); falls back to SFSpeechRecognizer.
+/// On-device speech-to-text. Prefers Whisper (via WhisperKit, CoreML) for
+/// quality on messy multi-speaker meeting audio; falls back to Apple's
+/// SpeechAnalyzer / SFSpeechRecognizer if Whisper is unavailable or set to
+/// "apple" in the config.
 enum Transcriber {
     enum TranscriberError: Error, LocalizedError {
         case localeUnsupported(String)
@@ -19,8 +22,22 @@ enum Transcriber {
         }
     }
 
-    static func transcribe(audioURL: URL, localeIdentifier: String) async throws -> String {
+    static func transcribe(
+        audioURL: URL, localeIdentifier: String, whisperModel: String = "large-v3-v20240930_turbo"
+    ) async throws -> String {
         let locale = Locale(identifier: localeIdentifier)
+
+        if whisperModel.lowercased() != "apple" {
+            do {
+                let text = try await transcribeWithWhisper(
+                    audioURL: audioURL, locale: locale, model: whisperModel)
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+                Log.info("Whisper produced no text; falling back to Apple speech")
+            } catch {
+                Log.info("WhisperKit failed (\(error)); falling back to Apple speech")
+            }
+        }
+
         if #available(macOS 26.0, *) {
             do {
                 let text = try await transcribeWithAnalyzer(audioURL: audioURL, locale: locale)
@@ -30,6 +47,60 @@ enum Transcriber {
             }
         }
         return try await transcribeLegacy(audioURL: audioURL, locale: locale)
+    }
+
+    // MARK: Whisper via WhisperKit
+
+    // One pipeline is cached per app run: model load takes seconds and the
+    // transcription queue is serialized, so reuse is safe and worthwhile.
+    private static var cachedPipeline: WhisperKit?
+    private static var cachedModelName: String?
+
+    private static func whisperPipeline(model: String) async throws -> WhisperKit {
+        if let pipeline = cachedPipeline, cachedModelName == model { return pipeline }
+
+        // Keep models inside our own Application Support dir — never
+        // ~/Documents, which would trigger a TCC folder prompt.
+        let modelsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Earwig/Models", isDirectory: true)
+        try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+
+        Log.info("Preparing Whisper model '\(model)' (first run downloads ~1.5 GB)...")
+        let config = WhisperKitConfig(
+            model: model,
+            downloadBase: modelsDir,
+            verbose: false,
+            logLevel: .error,
+            prewarm: true,
+            load: true,
+            download: true
+        )
+        let pipeline = try await WhisperKit(config)
+        Log.info("Whisper model '\(model)' ready")
+        cachedPipeline = pipeline
+        cachedModelName = model
+        return pipeline
+    }
+
+    private static func transcribeWithWhisper(
+        audioURL: URL, locale: Locale, model: String
+    ) async throws -> String {
+        let pipeline = try await whisperPipeline(model: model)
+
+        var options = DecodingOptions()
+        options.task = .transcribe
+        options.chunkingStrategy = .vad
+        if let language = locale.language.languageCode?.identifier {
+            options.language = language
+        }
+
+        let results = try await pipeline.transcribe(
+            audioPath: audioURL.path, decodeOptions: options)
+        let text = results.map(\.text)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw TranscriberError.empty }
+        return text
     }
 
     // MARK: macOS 26 SpeechAnalyzer

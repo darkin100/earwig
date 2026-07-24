@@ -16,7 +16,8 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
         do {
             print("Transcribing \(audioURL.path)...")
             let transcript = try await Transcriber.transcribe(
-                audioURL: audioURL, localeIdentifier: config.localeIdentifier)
+                audioURL: audioURL, localeIdentifier: config.localeIdentifier,
+                whisperModel: config.effectiveWhisperModel)
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")
             let notes = TranscriptNote.markdown(
                 transcript: transcript,

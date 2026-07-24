@@ -337,7 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     ) async {
         do {
             let transcript = try await Transcriber.transcribe(
-                audioURL: audioURL, localeIdentifier: cfg.localeIdentifier)
+                audioURL: audioURL, localeIdentifier: cfg.localeIdentifier,
+                whisperModel: cfg.effectiveWhisperModel)
             let notes = TranscriptNote.markdown(
                 transcript: transcript,
                 meetingDate: startedAt,

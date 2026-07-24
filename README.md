@@ -10,7 +10,7 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
 2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
 3. **Titles** *(optional, needs Accessibility)* — while recording, Earwig reads the meeting apps' window titles and identifies the call window (Teams meeting subject, Google Meet tab, Zoom topic, Slack huddle). The best candidate becomes the note's `title:`; all captured titles are listed under `window_titles:` for downstream context.
 4. **Auto-stop** — a call is considered ended when no *meeting app* has held the microphone for `autoStopGraceSeconds` (default 30s); the recording then stops and processing begins. With Accessibility granted there's a faster signal too: once every tracked call window has closed *and* the mic is free, recording stops after ~10s instead of the full grace period. Each call becomes its own recording and transcript — a new call after the grace window gets a fresh detection prompt, even while the previous one is still transcribing. A quick handoff *within* the grace window (e.g. Teams call rolling into a WhatsApp call) stays one session, and every app that joined is listed in the note's `source:`. Unrelated mic users (dictation tools, a stray browser tab) can't keep a session alive. If the call is on an app Earwig doesn't recognise, it falls back to stopping when the mic is released entirely; manual recordings with nothing on the mic never auto-stop.
-5. **Transcribe** — on-device with the macOS 26 `SpeechAnalyzer` long-form API (falls back to `SFSpeechRecognizer` on older systems). Audio never leaves your Mac. Transcription runs in the background, so back-to-back meetings are detected while the previous one is still processing.
+5. **Transcribe** — on-device with **Whisper large-v3 turbo** via [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML, VAD chunking). The model (~1.5 GB) is downloaded on first transcription and cached under Application Support. If Whisper fails — or `whisperModel` is set to `"apple"` — it falls back to the macOS 26 `SpeechAnalyzer` API, then `SFSpeechRecognizer`. Audio never leaves your Mac either way. Transcription runs in the background, so back-to-back meetings are detected while the previous one is still processing.
 6. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
 ```markdown
@@ -72,7 +72,8 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
   "audioFolder": "/Users/you/MeetingNotes/audio",
   "keepAudio": true,
   "localeIdentifier": "en-GB",
-  "autoStopGraceSeconds": 30
+  "autoStopGraceSeconds": 30,
+  "whisperModel": "large-v3-v20240930_turbo"
 }
 ```
 
@@ -80,6 +81,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 - `keepAudio` — set `false` to delete the merged `.m4a` after a successful transcription.
 - `localeIdentifier` — speech recognition language (defaults to your system locale).
 - `autoStopGraceSeconds` — how long a call must be off the microphone before the recording auto-stops (default 30). Raise it if flaky network reconnects split your meetings; lower it for snappier splits between back-to-back calls.
+- `whisperModel` — WhisperKit model variant (default `large-v3-v20240930_turbo`). Smaller/faster options include `large-v3-v20240930_626MB` or `distil-large-v3`; set to `"apple"` to skip Whisper and use the built-in macOS speech model.
 
 ## Menu bar
 

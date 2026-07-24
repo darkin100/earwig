@@ -8,8 +8,12 @@ struct Config: Codable {
     // Seconds a call must be off the microphone before recording auto-stops.
     // Optional so configs written by older builds still decode.
     var autoStopGraceSeconds: Int?
+    // WhisperKit model variant for transcription, or "apple" to use the
+    // built-in macOS speech model instead. Optional for config back-compat.
+    var whisperModel: String?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
+    var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }
 
     static var defaultConfig: Config {
         Config(
@@ -17,7 +21,8 @@ struct Config: Codable {
             audioFolder: ("~/MeetingNotes/audio" as NSString).expandingTildeInPath,
             keepAudio: true,
             localeIdentifier: Locale.current.identifier,
-            autoStopGraceSeconds: 30
+            autoStopGraceSeconds: 30,
+            whisperModel: "large-v3-v20240930_turbo"
         )
     }
 
