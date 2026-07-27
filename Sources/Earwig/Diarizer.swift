@@ -151,11 +151,13 @@ enum Diarizer {
             let clipURL = directory.appendingPathComponent(safeFileName(for: speaker) + ".m4a")
             try? FileManager.default.removeItem(at: clipURL)
             do {
+                // Quality-based AAC: a fixed bitrate is rejected for some
+                // source formats (e.g. mono/low sample rates).
                 let settings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVSampleRateKey: buffer.format.sampleRate,
                     AVNumberOfChannelsKey: buffer.format.channelCount,
-                    AVEncoderBitRateKey: 96000,
+                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
                 ]
                 let output = try AVAudioFile(
                     forWriting: clipURL, settings: settings,

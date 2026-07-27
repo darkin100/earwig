@@ -19,7 +19,7 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
      "Speaker 1": "audio/meeting-2026-06-11-0930-speakers/speaker-1.m4a"
    ```
 
-   **Speaker catalogue** — every new voice is also added to a local registry (Settings → **Speaker Identification…**) with its sample clip and a voice embedding. Listen to a clip, name the voice, and future meetings label that speaker by name automatically (cosine match against the stored embedding, `voiceMatchThreshold`, default 0.6). Voices you don't recognise can be deleted so the catalogue doesn't fill with strangers; repeat encounters with the same unnamed voice are matched, not re-added. Everything (clips, embeddings, names) stays in `~/Library/Application Support/Earwig/`.
+   **Speaker catalogue** — every new voice is also added to a local registry (Settings → **Speaker Identification…**) with its sample clip and a voice embedding. Listen to a clip, name the voice, and future meetings label that speaker by name automatically (cosine match against the stored embedding, `voiceMatchThreshold`, default 0.6). Naming a voice also **retroactively updates the meeting notes it appears in** — transcript turns and `speaker_samples` keys are rewritten from `Speaker N` to the name (the catalogue tracks which notes each voice appears in). Voices you don't recognise can be deleted so the catalogue doesn't fill with strangers; repeat encounters with the same unnamed voice are matched, not re-added. Everything (clips, embeddings, names) stays in `~/Library/Application Support/Earwig/`.
 7. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
 ```markdown
@@ -115,6 +115,10 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 
 # Record N seconds of mic + system audio (capture-path smoke test)
 ./Earwig.app/Contents/MacOS/Earwig --test-record 10 /tmp/test.m4a
+
+# Speaker catalogue from the command line (e.g. for downstream tooling)
+./Earwig.app/Contents/MacOS/Earwig --list-speakers
+./Earwig.app/Contents/MacOS/Earwig --set-speaker-name <id-prefix> "Sarah"
 ```
 
 If a recording is interrupted (crash, force quit), the raw captures survive in a `$TMPDIR/earwig-*` folder — `--merge` then `--process` recovers the meeting.

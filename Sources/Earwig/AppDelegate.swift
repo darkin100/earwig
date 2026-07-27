@@ -433,6 +433,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
             try? FileManager.default.removeItem(at: notesStashURL)
+            for record in result.speakerRecords {
+                SpeakerCatalog.shared.addAppearance(
+                    id: record.recordID, noteFile: noteURL.lastPathComponent, label: record.label)
+            }
             if !cfg.keepAudio {
                 try? FileManager.default.removeItem(at: audioURL)
             }

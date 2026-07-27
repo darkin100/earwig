@@ -30,6 +30,9 @@ enum Transcriber {
         let speakerCount: Int?
         /// One short clip per speaker for human identification.
         var speakerSamples: [Diarizer.SpeakerSample] = []
+        /// Catalogue record behind each transcript label, so the note can be
+        /// linked for retroactive renames.
+        var speakerRecords: [(label: String, recordID: UUID)] = []
     }
 
     static func transcribe(
@@ -184,19 +187,24 @@ enum Transcriber {
             // they show up in Settings > Speaker Identification for naming.
             let stamp = DateFormatter()
             stamp.dateFormat = "yyyy-MM-dd HH:mm"
+            var speakerRecords: [(label: String, recordID: UUID)] = []
             for (label, embedding) in outcome.meanEmbeddings {
+                let displayLabel = displayNames[label] ?? label
                 if let id = matchedIDs[label] {
                     SpeakerCatalog.shared.touch(id: id)
-                } else if let clip = samples.first(where: {
-                    $0.speaker == (displayNames[label] ?? label)
-                })?.url {
-                    SpeakerCatalog.shared.register(
+                    speakerRecords.append((label: displayLabel, recordID: id))
+                } else if let clip = samples.first(where: { $0.speaker == displayLabel })?.url {
+                    if let id = SpeakerCatalog.shared.register(
                         context: "\(label) · meeting \(stamp.string(from: Date()))",
                         embedding: embedding,
-                        sampleClip: clip)
+                        sampleClip: clip) {
+                        speakerRecords.append((label: displayLabel, recordID: id))
+                    }
                 }
             }
-            return Output(text: attributed, speakerCount: speakerCount, speakerSamples: samples)
+            return Output(
+                text: attributed, speakerCount: speakerCount,
+                speakerSamples: samples, speakerRecords: speakerRecords)
         } catch {
             Log.info("Diarization failed (\(error)); writing unattributed transcript")
             return Output(text: plainText, speakerCount: nil)

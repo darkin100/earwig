@@ -41,6 +41,10 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
             let noteURL = config.notesFolderURL
                 .appendingPathComponent("meeting-\(stampFormatter.string(from: Date())).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
+            for record in result.speakerRecords {
+                SpeakerCatalog.shared.addAppearance(
+                    id: record.recordID, noteFile: noteURL.lastPathComponent, label: record.label)
+            }
             print("Note written: \(noteURL.path)")
         } catch {
             print("FAILED: \(error)")
@@ -99,6 +103,34 @@ if let flagIndex = args.firstIndex(of: "--test-record"), args.count > flagIndex 
     }
     semaphore.wait()
     exit(exitCode)
+}
+
+// Headless mode: `Earwig --list-speakers` prints the catalogue.
+if args.contains("--list-speakers") {
+    for record in SpeakerCatalog.shared.all() {
+        let appearances = record.appearances?.count ?? 0
+        print("\(record.id.uuidString.prefix(8))  \(record.name ?? "<unnamed>")  [\(record.context)]  notes: \(appearances)")
+    }
+    exit(0)
+}
+
+// Headless mode: `Earwig --set-speaker-name <id-prefix> <name>` names a
+// catalogued voice and retroactively updates the meeting notes it appears in.
+if let flagIndex = args.firstIndex(of: "--set-speaker-name"), args.count > flagIndex + 2 {
+    let idPrefix = args[flagIndex + 1].lowercased()
+    let name = args[flagIndex + 2]
+    let matches = SpeakerCatalog.shared.all().filter {
+        $0.id.uuidString.lowercased().hasPrefix(idPrefix)
+    }
+    guard matches.count == 1 else {
+        print(matches.isEmpty
+            ? "No speaker record matches id prefix '\(idPrefix)' (see --list-speakers)"
+            : "Ambiguous id prefix '\(idPrefix)' — matches \(matches.count) records")
+        exit(1)
+    }
+    SpeakerCatalog.shared.setName(id: matches[0].id, name: name)
+    print("Named \(matches[0].id.uuidString.prefix(8)) as \(name)")
+    exit(0)
 }
 
 let app = NSApplication.shared

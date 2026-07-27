@@ -103,7 +103,9 @@ struct SpeakersView: View {
                             .controlSize(.small)
                     }
                 }
-                Text("\(record.context) · last heard \(record.lastHeard.formatted(date: .abbreviated, time: .shortened))")
+                let noteCount = record.appearances?.count ?? 0
+                Text("\(record.context) · last heard \(record.lastHeard.formatted(date: .abbreviated, time: .shortened))"
+                    + (noteCount > 0 ? " · \(noteCount) note\(noteCount == 1 ? "" : "s")" : ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
