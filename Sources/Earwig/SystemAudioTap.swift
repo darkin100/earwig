@@ -24,6 +24,7 @@ final class SystemAudioTap {
     private var file: AVAudioFile?
     private var tapFormat: AVAudioFormat?
     private var loggedWriteError = false
+    private var rateListener: AudioObjectPropertyListenerBlock?
     private let queue = DispatchQueue(label: "io.darkin.earwig.systemtap")
 
     func start(writingTo url: URL) throws {
@@ -95,9 +96,22 @@ final class SystemAudioTap {
                     let channels = interleaved
                         ? AVAudioChannelCount(channelsPerBuffer)
                         : AVAudioChannelCount(bufferCount)
+                    // The tap's declared format can lie about the rate: when a
+                    // Bluetooth headset's mic is in use, the whole device drops
+                    // to call mode (~24kHz) while the tap still claims 48kHz —
+                    // recording everything at 2x speed. The aggregate device's
+                    // *current* nominal rate is authoritative at the moment
+                    // buffers actually flow.
+                    var effectiveRate = sampleRate
+                    if let deviceRate = Self.nominalSampleRate(of: self.aggregateID), deviceRate > 0 {
+                        if abs(deviceRate - sampleRate) > 1 {
+                            Log.info("system tap: device runs at \(Int(deviceRate))Hz, tap declared \(Int(sampleRate))Hz — using device rate")
+                        }
+                        effectiveRate = deviceRate
+                    }
                     guard let format = AVAudioFormat(
                         commonFormat: .pcmFormatFloat32,
-                        sampleRate: sampleRate,
+                        sampleRate: effectiveRate,
                         channels: channels,
                         interleaved: interleaved) else {
                         Log.info("system tap: could not build format (buffers=\(bufferCount) ch=\(channelsPerBuffer))")
@@ -110,7 +124,7 @@ final class SystemAudioTap {
                             settings: format.settings,
                             commonFormat: .pcmFormatFloat32,
                             interleaved: interleaved)
-                        Log.info("system tap writing \(channels)ch \(interleaved ? "interleaved" : "deinterleaved") @ \(Int(sampleRate))Hz")
+                        Log.info("system tap writing \(channels)ch \(interleaved ? "interleaved" : "deinterleaved") @ \(Int(effectiveRate))Hz (device rate)")
                     } catch {
                         Log.info("system tap: could not create file: \(error)")
                         return
@@ -135,6 +149,24 @@ final class SystemAudioTap {
 
             status = AudioDeviceStart(aggregateID, ioProcID)
             guard status == noErr else { throw TapError.coreAudio("AudioDeviceStart", status) }
+
+            // Flag mid-recording rate changes (e.g. AirPods entering or
+            // leaving Bluetooth call mode) — audio written after such a
+            // change is mis-timed until the next recording.
+            var rateAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                guard let self else { return }
+                let newRate = Self.nominalSampleRate(of: self.aggregateID) ?? 0
+                let fileRate = self.tapFormat?.sampleRate ?? 0
+                if fileRate > 0, abs(newRate - fileRate) > 1 {
+                    Log.info("WARNING: device sample rate changed mid-recording (\(Int(fileRate))Hz -> \(Int(newRate))Hz) — system audio from this point may be mis-timed; stop and restart the recording to correct it")
+                }
+            }
+            AudioObjectAddPropertyListenerBlock(aggregateID, &rateAddress, queue, listener)
+            rateListener = listener
         } catch {
             stop()
             throw error
@@ -142,6 +174,14 @@ final class SystemAudioTap {
     }
 
     func stop() {
+        if aggregateID != kAudioObjectUnknown, let rateListener {
+            var rateAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(aggregateID, &rateAddress, queue, rateListener)
+        }
+        rateListener = nil
         if aggregateID != kAudioObjectUnknown, let ioProcID {
             AudioDeviceStop(aggregateID, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateID, ioProcID)
@@ -162,6 +202,20 @@ final class SystemAudioTap {
     }
 
     // MARK: helpers
+
+    /// The device's *current* sample rate — unlike the tap's declared format,
+    /// this reflects e.g. a Bluetooth headset being in call mode.
+    private static func nominalSampleRate(of deviceID: AudioObjectID) -> Double? {
+        guard deviceID != kAudioObjectUnknown else { return nil }
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
+        return (status == noErr && rate > 0) ? rate : nil
+    }
 
     private static func defaultOutputDeviceUID() throws -> String {
         var deviceID = AudioDeviceID(0)
