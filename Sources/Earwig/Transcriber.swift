@@ -33,6 +33,8 @@ enum Transcriber {
         /// Catalogue record behind each transcript label, so the note can be
         /// linked for retroactive renames.
         var speakerRecords: [(label: String, recordID: UUID)] = []
+        /// True when the on-device model applied context-aware repairs.
+        var repaired = false
     }
 
     static func transcribe(
@@ -41,7 +43,36 @@ enum Transcriber {
         diarize: Bool = true,
         sampleClipsDir: URL? = nil,
         voiceMatchThreshold: Double = 0.6,
-        channels: Recorder.ChannelFiles? = nil
+        channels: Recorder.ChannelFiles? = nil,
+        repairTranscript: Bool = true
+    ) async throws -> Output {
+        var output = try await transcribeCore(
+            audioURL: audioURL, localeIdentifier: localeIdentifier,
+            whisperModel: whisperModel, diarize: diarize,
+            sampleClipsDir: sampleClipsDir,
+            voiceMatchThreshold: voiceMatchThreshold, channels: channels)
+
+        // Context-aware repair of obvious mis-recognitions, on-device.
+        if repairTranscript, output.text.contains("**") {
+            let names = TranscriptRepair.speakerNames(in: output.text)
+            if let repaired = await TranscriptRepair.repair(
+                transcript: output.text, speakerNames: names) {
+                output = Output(
+                    text: repaired, speakerCount: output.speakerCount,
+                    speakerSamples: output.speakerSamples,
+                    speakerRecords: output.speakerRecords, repaired: true)
+            }
+        }
+        return output
+    }
+
+    private static func transcribeCore(
+        audioURL: URL, localeIdentifier: String,
+        whisperModel: String,
+        diarize: Bool,
+        sampleClipsDir: URL?,
+        voiceMatchThreshold: Double,
+        channels: Recorder.ChannelFiles?
     ) async throws -> Output {
         let locale = Locale(identifier: localeIdentifier)
 

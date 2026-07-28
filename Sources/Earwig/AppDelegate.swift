@@ -420,7 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 diarize: cfg.effectiveDiarization,
                 sampleClipsDir: samplesDir,
                 voiceMatchThreshold: cfg.effectiveVoiceMatchThreshold,
-                channels: channels)
+                channels: channels,
+                repairTranscript: cfg.effectiveTranscriptRepair)
             let notes = TranscriptNote.markdown(
                 transcript: result.text,
                 meetingDate: startedAt,
@@ -432,7 +433,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 speakerSamples: result.speakerSamples.map {
                     ($0.speaker, Self.notePath(for: $0.url, notesFolder: cfg.notesFolderURL))
                 },
-                userNotes: userNotes)
+                userNotes: userNotes,
+                transcriptCleanup: result.repaired ? "auto (on-device model)" : nil)
             let noteURL = cfg.notesFolderURL.appendingPathComponent("meeting-\(stamp).md")
             try notes.write(to: noteURL, atomically: true, encoding: .utf8)
             try? FileManager.default.removeItem(at: notesStashURL)

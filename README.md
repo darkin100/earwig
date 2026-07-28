@@ -20,7 +20,8 @@ Earwig deliberately stops at speech-to-text. Summarisation, action items, and an
    ```
 
    **Speaker catalogue** — every new voice is also added to a local registry (Settings → **Speaker Identification…**) with its sample clip and a voice embedding. Listen to a clip, name the voice, and future meetings label that speaker by name automatically (cosine match against the stored embedding, `voiceMatchThreshold`, default 0.6). Naming a voice also **retroactively updates the meeting notes it appears in** — transcript turns and `speaker_samples` keys are rewritten from `Speaker N` to the name (the catalogue tracks which notes each voice appears in). Voices you don't recognise can be deleted so the catalogue doesn't fill with strangers; repeat encounters with the same unnamed voice are matched, not re-added. Everything (clips, embeddings, names) stays in `~/Library/Application Support/Earwig/`.
-7. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
+7. **Repair** *(optional, needs Apple Intelligence)* — obvious speech-to-text mis-recognitions are fixed by Apple's on-device Foundation Model, chunk by chunk: "the servility" -> "the observability", misheard participant names corrected against the speaker list. Strictly content-preserving — a chunk whose repair changes the structure or length materially is discarded — and recorded in frontmatter as `transcript_cleanup: "auto (on-device model)"`. Toggle in Settings (`enableTranscriptRepair`); silently skipped when Apple Intelligence is unavailable. `--repair-note <note.md>` applies the same repair to an existing note.
+8. **Write** — the raw transcript lands as markdown with YAML frontmatter in the notes folder:
 
 ```markdown
 ---
@@ -118,6 +119,9 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 
 # Two-channel pipeline on raw channel captures (salvage/testing)
 ./Earwig.app/Contents/MacOS/Earwig --process-pair mic.caf system.caf 1.0
+
+# Context-aware repair of an existing note's transcript (Apple Intelligence)
+./Earwig.app/Contents/MacOS/Earwig --repair-note ~/MeetingNotes/meeting-2026-07-01-0916.md
 
 # Speaker catalogue from the command line (e.g. for downstream tooling)
 ./Earwig.app/Contents/MacOS/Earwig --list-speakers

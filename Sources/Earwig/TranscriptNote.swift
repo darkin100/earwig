@@ -13,7 +13,8 @@ enum TranscriptNote {
         windowTitles: [String] = [],
         speakerCount: Int? = nil,
         speakerSamples: [(speaker: String, path: String)] = [],
-        userNotes: String = ""
+        userNotes: String = "",
+        transcriptCleanup: String? = nil
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
@@ -45,6 +46,9 @@ enum TranscriptNote {
         }
         if !userNotes.isEmpty {
             frontmatter += "\nhas_live_notes: true"
+        }
+        if let transcriptCleanup {
+            frontmatter += "\ntranscript_cleanup: \(yamlQuoted(transcriptCleanup))"
         }
         frontmatter += """
 

@@ -42,6 +42,7 @@ struct SettingsView: View {
     @State private var autoStopGrace: Int
     @State private var whisperModel: String
     @State private var enableDiarization: Bool
+    @State private var enableTranscriptRepair: Bool
     @State private var saved = false
     @State private var unidentifiedCount = SpeakerCatalog.shared.all()
         .filter { ($0.name ?? "").isEmpty }.count
@@ -63,6 +64,7 @@ struct SettingsView: View {
         _autoStopGrace = State(initialValue: config.effectiveAutoStopGrace)
         _whisperModel = State(initialValue: config.effectiveWhisperModel)
         _enableDiarization = State(initialValue: config.effectiveDiarization)
+        _enableTranscriptRepair = State(initialValue: config.effectiveTranscriptRepair)
     }
 
     private var modelChoices: [(id: String, label: String)] {
@@ -93,6 +95,13 @@ struct SettingsView: View {
                     .disabled(whisperModel == "apple")
                 if whisperModel == "apple" {
                     Text("Diarization needs the Whisper engine.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("Repair obvious transcription errors (Apple Intelligence)", isOn: $enableTranscriptRepair)
+                    .disabled(!TranscriptRepair.isAvailable)
+                if !TranscriptRepair.isAvailable {
+                    Text("Requires Apple Intelligence to be enabled on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -169,6 +178,7 @@ struct SettingsView: View {
         config.autoStopGraceSeconds = autoStopGrace
         config.whisperModel = whisperModel
         config.enableDiarization = enableDiarization
+        config.enableTranscriptRepair = enableTranscriptRepair
         config.save()
         config.ensureFolders()
         Log.info("Settings saved")

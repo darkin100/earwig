@@ -15,11 +15,15 @@ struct Config: Codable {
     var enableDiarization: Bool?
     // Cosine similarity a voice must reach to match a catalogued speaker.
     var voiceMatchThreshold: Double?
+    // Repair obvious speech-to-text mis-recognitions with the on-device
+    // Apple Intelligence model.
+    var enableTranscriptRepair: Bool?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
     var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }
     var effectiveDiarization: Bool { enableDiarization ?? true }
     var effectiveVoiceMatchThreshold: Double { voiceMatchThreshold ?? 0.6 }
+    var effectiveTranscriptRepair: Bool { enableTranscriptRepair ?? true }
 
     static var defaultConfig: Config {
         Config(
@@ -30,7 +34,8 @@ struct Config: Codable {
             autoStopGraceSeconds: 30,
             whisperModel: "large-v3-v20240930_turbo",
             enableDiarization: true,
-            voiceMatchThreshold: 0.6
+            voiceMatchThreshold: 0.6,
+            enableTranscriptRepair: true
         )
     }
 

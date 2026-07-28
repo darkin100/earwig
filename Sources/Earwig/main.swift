@@ -33,7 +33,8 @@ if let flagIndex = args.firstIndex(of: "--process-pair"), args.count > flagIndex
                 diarize: config.effectiveDiarization,
                 sampleClipsDir: samplesDir,
                 voiceMatchThreshold: config.effectiveVoiceMatchThreshold,
-                channels: channels)
+                channels: channels,
+                repairTranscript: config.effectiveTranscriptRepair)
             if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
             let notes = TranscriptNote.markdown(
                 transcript: result.text,
@@ -43,7 +44,8 @@ if let flagIndex = args.firstIndex(of: "--process-pair"), args.count > flagIndex
                 speakerCount: result.speakerCount,
                 speakerSamples: result.speakerSamples.map {
                     ($0.speaker, AppDelegate.notePath(for: $0.url, notesFolder: config.notesFolderURL))
-                })
+                },
+                transcriptCleanup: result.repaired ? "auto (on-device model)" : nil)
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL
@@ -82,7 +84,8 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
                 whisperModel: config.effectiveWhisperModel,
                 diarize: config.effectiveDiarization,
                 sampleClipsDir: samplesDir,
-                voiceMatchThreshold: config.effectiveVoiceMatchThreshold)
+                voiceMatchThreshold: config.effectiveVoiceMatchThreshold,
+                repairTranscript: config.effectiveTranscriptRepair)
             let transcript = result.text
             if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
             print("Transcript (\(transcript.count) chars):\n---\n\(transcript.prefix(2000))\n---")
@@ -94,7 +97,8 @@ if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 
                 speakerCount: result.speakerCount,
                 speakerSamples: result.speakerSamples.map {
                     ($0.speaker, AppDelegate.notePath(for: $0.url, notesFolder: config.notesFolderURL))
-                })
+                },
+                transcriptCleanup: result.repaired ? "auto (on-device model)" : nil)
             let stampFormatter = DateFormatter()
             stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
             let noteURL = config.notesFolderURL
@@ -154,6 +158,54 @@ if let flagIndex = args.firstIndex(of: "--test-record"), args.count > flagIndex 
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             _ = try await recorder.stop(mergedTo: outURL)
             print("Wrote \(outURL.path)")
+        } catch {
+            print("FAILED: \(error)")
+            exitCode = 1
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    exit(exitCode)
+}
+
+// Headless mode: `Earwig --repair-note <note.md>` runs context-aware repair
+// of speech-to-text errors over an existing note's transcript, in place.
+if let flagIndex = args.firstIndex(of: "--repair-note"), args.count > flagIndex + 1 {
+    let noteURL = URL(fileURLWithPath: (args[flagIndex + 1] as NSString).expandingTildeInPath)
+    let semaphore = DispatchSemaphore(value: 0)
+    var exitCode: Int32 = 0
+    Task {
+        do {
+            guard TranscriptRepair.isAvailable else {
+                print("Apple Intelligence on-device model is not available on this Mac.")
+                exitCode = 1
+                semaphore.signal()
+                return
+            }
+            let content = try String(contentsOf: noteURL, encoding: .utf8)
+            guard let range = content.range(of: "## Transcript") else {
+                print("No '## Transcript' section found in \(noteURL.lastPathComponent)")
+                exitCode = 1
+                semaphore.signal()
+                return
+            }
+            let head = String(content[..<range.lowerBound])
+            let transcript = String(content[range.lowerBound...])
+            let names = TranscriptRepair.speakerNames(in: transcript)
+            print("Repairing transcript (\(transcript.count) chars, speakers: \(names.joined(separator: ", ")))...")
+            if let repaired = await TranscriptRepair.repair(
+                transcript: transcript, speakerNames: names) {
+                var newHead = head
+                if !newHead.contains("transcript_cleanup:"),
+                   let statusRange = newHead.range(of: "status: raw-transcript") {
+                    newHead.replaceSubrange(statusRange, with:
+                        "status: raw-transcript\ntranscript_cleanup: \"auto (on-device model)\"")
+                }
+                try (newHead + repaired).write(to: noteURL, atomically: true, encoding: .utf8)
+                print("Repairs applied and saved.")
+            } else {
+                print("No repairs needed (or model unavailable).")
+            }
         } catch {
             print("FAILED: \(error)")
             exitCode = 1
