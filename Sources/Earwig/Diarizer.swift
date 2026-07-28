@@ -173,6 +173,15 @@ enum Diarizer {
         return samples
     }
 
+    /// RMS energy of a time range in an audio file — used as a speech floor
+    /// when filtering transcription of noisy channels.
+    static func speechEnergy(file: AVAudioFile, start: Double, end: Double) -> Float? {
+        guard end > start,
+              let buffer = readSegment(from: file, start: start, duration: end - start)
+        else { return nil }
+        return rms(of: buffer)
+    }
+
     private static func safeFileName(for speaker: String) -> String {
         speaker.lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)

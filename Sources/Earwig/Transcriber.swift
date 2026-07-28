@@ -113,8 +113,23 @@ enum Transcriber {
         // 1. Whisper each channel independently.
         let systemWhisper = try await whisperRawSegments(
             audioURL: channels.system, locale: locale, model: model)
-        let micWhisper = try await whisperRawSegments(
+        var micWhisper = try await whisperRawSegments(
             audioURL: channels.mic, locale: locale, model: model)
+
+        // Energy gate for the mic channel: while the user is muted the mic
+        // still records room ambience, which Whisper happily "transcribes".
+        // Real speech into a nearby mic is far above the ambience floor.
+        if let micFile = try? AVAudioFile(forReading: channels.mic) {
+            let before = micWhisper.count
+            micWhisper = micWhisper.filter { segment in
+                guard let energy = Diarizer.speechEnergy(
+                    file: micFile, start: segment.start, end: segment.end) else { return true }
+                return energy >= 0.004
+            }
+            if micWhisper.count != before {
+                Log.info("Energy gate dropped \(before - micWhisper.count) mic segment(s) below the speech floor")
+            }
+        }
         guard !(systemWhisper.isEmpty && micWhisper.isEmpty) else {
             throw TranscriberError.empty
         }
@@ -294,12 +309,32 @@ enum Transcriber {
         }
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)
-        return results
-            .flatMap(\.segments)
+        let segments = results.flatMap(\.segments)
+        let kept = segments.filter { !isLikelyHallucination($0) }
+        if kept.count != segments.count {
+            Log.info("Dropped \(segments.count - kept.count) low-confidence/hallucinated segment(s) from \(audioURL.lastPathComponent)")
+        }
+        return kept
             .map { (start: Double($0.start), end: Double($0.end),
                     text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.text.isEmpty }
             .sorted { $0.start < $1.start }
+    }
+
+    /// Whisper hallucinates stock phrases ("Jesus.", "Thank you.") over
+    /// non-speech audio, and loops phrases when decoding degrades. Its own
+    /// per-segment metadata flags both.
+    static func isLikelyHallucination(_ segment: TranscriptionSegment) -> Bool {
+        // Whisper's classic gate: probably-not-speech + unconfident decode.
+        if segment.noSpeechProb > 0.6 && segment.avgLogprob < -1.0 { return true }
+        // Deeply unconfident decode regardless of speech probability.
+        if segment.avgLogprob < -1.8 { return true }
+        // Repetition loop (compression ratio) — "Jesus. Jesus. Jesus."
+        if segment.compressionRatio > 2.4 { return true }
+        // Explicit check for one short phrase repeated over and over.
+        let words = normalized(segment.text).split(separator: " ")
+        if words.count >= 3, Set(words).count == 1 { return true }
+        return false
     }
 
     // MARK: Whisper via WhisperKit
@@ -393,6 +428,7 @@ enum Transcriber {
             }
             let whisperSegments = results
                 .flatMap(\.segments)
+                .filter { !isLikelyHallucination($0) }
                 .map { (start: Double($0.start), end: Double($0.end),
                         text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
                 .filter { !$0.text.isEmpty }
