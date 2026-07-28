@@ -204,6 +204,28 @@ enum Transcriber {
         }
         var (systemSegments, systemEmbeddings) = renumbered(systemOutcome)
         var (micSegments, micEmbeddings) = renumbered(micOutcome)
+
+        // Cross-channel echo suppression: a mic-channel voice whose embedding
+        // matches a system-channel voice IS that remote participant leaking
+        // through the speakers into the microphone. The system channel is
+        // authoritative for remote voices — drop the mic cluster entirely so
+        // it can't duplicate text or spawn a phantom catalogue entry.
+        var echoLabels: Set<String> = []
+        for (micLabel, micEmbedding) in micEmbeddings {
+            var best: (label: String, similarity: Double)?
+            for (systemLabel, systemEmbedding) in systemEmbeddings {
+                let similarity = SpeakerCatalog.cosineSimilarity(micEmbedding, systemEmbedding)
+                if similarity > (best?.similarity ?? 0) {
+                    best = (systemLabel, similarity)
+                }
+            }
+            if let best, best.similarity >= 0.65 {
+                echoLabels.insert(micLabel)
+                Log.info("Mic voice \(micLabel) is an echo of \(best.label) (similarity \(String(format: "%.2f", best.similarity))) — dropping it")
+            }
+        }
+        micEmbeddings = micEmbeddings.filter { !echoLabels.contains($0.key) }
+
         var allEmbeddings = systemEmbeddings.merging(micEmbeddings) { a, _ in a }
 
         // 3. Match voices against the catalogue; rename matched+named labels.
@@ -235,20 +257,29 @@ enum Transcriber {
                                           fallbackLabel: "Remote speaker")
         var micAttributed = attributed(whisper: micWhisper, diarized: micSegments,
                                        fallbackLabel: "Me")
+        // Text spoken by an echo cluster goes with it.
+        if !echoLabels.isEmpty {
+            let before = micAttributed.count
+            micAttributed = micAttributed.filter { !echoLabels.contains($0.speaker) }
+            if micAttributed.count != before {
+                Log.info("Dropped \(before - micAttributed.count) mic segment(s) belonging to echo voices")
+            }
+        }
         for i in micAttributed.indices {
             micAttributed[i].start += channels.micOffset
             micAttributed[i].end += channels.micOffset
         }
 
-        // 5. Echo guard: with loudspeakers, the mic re-hears remote voices.
-        //    Drop mic segments that overlap remote speech with duplicated text.
+        // 5. Echo guard, text level: catches residual duplicates the embedding
+        //    check can't (e.g. a cluster that mixes real speech and echo).
+        //    Fuzzy token overlap, since Whisper transcribes the two copies of
+        //    the same words slightly differently.
         let beforeEcho = micAttributed.count
         micAttributed = micAttributed.filter { mic in
             !systemAttributed.contains { sys in
                 let overlap = min(mic.end, sys.end) - max(mic.start, sys.start)
-                guard overlap > 0.7 * max(0.1, mic.end - mic.start) else { return false }
-                let a = normalized(mic.text), b = normalized(sys.text)
-                return !a.isEmpty && (b.contains(a) || a.contains(b))
+                guard overlap > 0.4 * max(0.1, mic.end - mic.start) else { return false }
+                return isDuplicateText(mic.text, sys.text)
             }
         }
         if micAttributed.count != beforeEcho {
@@ -269,13 +300,16 @@ enum Transcriber {
         }
         let text = turns.map { "**\($0.speaker):** \($0.text)" }.joined(separator: "\n\n")
 
-        // 7. Samples come from each voice's own clean channel.
+        // 7. Samples come from each voice's own clean channel (echo clusters
+        //    excluded — their "voice" is already sampled from the system side).
         var samples: [Diarizer.SpeakerSample] = []
         if let sampleClipsDir {
             samples = await Diarizer.exportSamples(
                 from: channels.system, segments: systemSegments, to: sampleClipsDir)
             samples += await Diarizer.exportSamples(
-                from: channels.mic, segments: micSegments, to: sampleClipsDir)
+                from: channels.mic,
+                segments: micSegments.filter { !echoLabels.contains($0.speaker) },
+                to: sampleClipsDir)
         }
 
         // 8. Catalogue upkeep, as in the single-channel path.
@@ -329,6 +363,17 @@ enum Transcriber {
                 start: segment.start, end: segment.end, text: segment.text, speaker: speaker))
         }
         return result
+    }
+
+    /// Fuzzy same-words check: containment or strong token overlap.
+    private static func isDuplicateText(_ a: String, _ b: String) -> Bool {
+        let na = normalized(a), nb = normalized(b)
+        guard !na.isEmpty, !nb.isEmpty else { return false }
+        if na.contains(nb) || nb.contains(na) { return true }
+        let ta = Set(na.split(separator: " ")), tb = Set(nb.split(separator: " "))
+        guard ta.count >= 3, tb.count >= 3 else { return false }
+        let intersection = ta.intersection(tb).count
+        return Double(intersection) / Double(min(ta.count, tb.count)) >= 0.6
     }
 
     private static func normalized(_ text: String) -> String {
