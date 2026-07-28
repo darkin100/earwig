@@ -141,7 +141,7 @@ enum Transcriber {
 
     // MARK: Two-channel processing (mic + system separately)
 
-    private struct AttributedSegment {
+    struct AttributedSegment {
         var start: Double
         var end: Double
         let text: String
@@ -340,7 +340,7 @@ enum Transcriber {
     /// Attributes whisper segments to the channel's diarized voices; segments
     /// overlapping no diarized speech inherit the previous speaker, or the
     /// channel's fallback label.
-    private static func attributed(
+    static func attributed(
         whisper: [(start: Double, end: Double, text: String)],
         diarized: [Diarizer.SpeakerSegment],
         fallbackLabel: String
@@ -366,7 +366,7 @@ enum Transcriber {
     }
 
     /// Fuzzy same-words check: containment or strong token overlap.
-    private static func isDuplicateText(_ a: String, _ b: String) -> Bool {
+    static func isDuplicateText(_ a: String, _ b: String) -> Bool {
         let na = normalized(a), nb = normalized(b)
         guard !na.isEmpty, !nb.isEmpty else { return false }
         if na.contains(nb) || nb.contains(na) { return true }
@@ -376,7 +376,7 @@ enum Transcriber {
         return Double(intersection) / Double(min(ta.count, tb.count)) >= 0.6
     }
 
-    private static func normalized(_ text: String) -> String {
+    static func normalized(_ text: String) -> String {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
@@ -431,9 +431,18 @@ enum Transcriber {
         if segment.avgLogprob < -1.8 { return true }
         // Repetition loop (compression ratio) — "Jesus. Jesus. Jesus."
         if segment.compressionRatio > 2.4 { return true }
-        // Explicit check for one short phrase repeated over and over.
+        // Explicit check for one short phrase repeated over and over
+        // ("Jesus. Jesus. Jesus.", "Thank you. Thank you. Thank you.").
         let words = normalized(segment.text).split(separator: " ")
-        if words.count >= 3, Set(words).count == 1 { return true }
+        for phraseLength in 1...3 where words.count >= phraseLength * 3 {
+            let phrase = Array(words.prefix(phraseLength))
+            if words.count % phraseLength == 0,
+               stride(from: 0, to: words.count, by: phraseLength).allSatisfy({ offset in
+                   Array(words[offset..<offset + phraseLength]) == phrase
+               }) {
+                return true
+            }
+        }
         return false
     }
 

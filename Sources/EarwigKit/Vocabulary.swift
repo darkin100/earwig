@@ -16,10 +16,24 @@ enum Vocabulary {
     }
 
     static func current() -> Current {
-        let config = Config.load()
+        var current = parse(entries: Config.load().vocabulary ?? [])
+        // The speaker catalogue is a dictionary of names we already know.
+        var terms = current.terms
+        for record in SpeakerCatalog.shared.all() {
+            if let name = record.name, !name.isEmpty, !terms.contains(name) {
+                terms.append(name)
+            }
+        }
+        current = Current(terms: terms, corrections: current.corrections)
+        return current
+    }
+
+    /// Pure parsing of dictionary entries — a line is either a canonical term
+    /// or a "wrong -> right" correction pair.
+    static func parse(entries: [String]) -> Current {
         var terms: [String] = []
         var corrections: [(wrong: String, right: String)] = []
-        for raw in config.vocabulary ?? [] {
+        for raw in entries {
             let parts = raw.components(separatedBy: "->")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             if parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty {
@@ -28,12 +42,6 @@ enum Vocabulary {
             } else {
                 let term = raw.trimmingCharacters(in: .whitespaces)
                 if !term.isEmpty, !terms.contains(term) { terms.append(term) }
-            }
-        }
-        // The speaker catalogue is a dictionary of names we already know.
-        for record in SpeakerCatalog.shared.all() {
-            if let name = record.name, !name.isEmpty, !terms.contains(name) {
-                terms.append(name)
             }
         }
         return Current(terms: terms, corrections: corrections)
@@ -52,7 +60,9 @@ enum Vocabulary {
         var result = text
         var total = 0
         for (wrong, right) in corrections {
-            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: wrong) + "\\b"
+            // Lookarounds, not \b: terms can start or end with non-word
+            // characters ("a.b (beta)"), where \b never matches.
+            let pattern = "(?<!\\w)" + NSRegularExpression.escapedPattern(for: wrong) + "(?!\\w)"
             guard let regex = try? NSRegularExpression(
                 pattern: pattern, options: [.caseInsensitive]) else { continue }
             let range = NSRange(result.startIndex..., in: result)

@@ -106,6 +106,14 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 - **Settings…** (⌘,) — folders, keep-audio, transcription model, language, diarization, auto-stop grace, and an Open Log button, in a native settings window. (The JSON config below remains the source of truth for anything exotic.)
 - **Open Notes Folder**
 
+## Tests
+
+```sh
+swift run earwig-tests
+```
+
+Swift Testing suite covering the pipeline's pure logic: hallucination gates, echo detection, speaker attribution, dictionary corrections, repair guardrails, the note format contract, and config compatibility — including regression fixtures captured from real meeting failures. (The runner is an executable because SwiftPM's `swift test` cannot drive swift-testing on bare Command Line Tools installs.)
+
 ## Headless modes
 
 ```sh
