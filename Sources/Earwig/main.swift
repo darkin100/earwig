@@ -5,6 +5,65 @@ import Foundation
 // notes pipeline on an existing recording and exits. Used for testing and for
 // re-processing a meeting whose pipeline failed.
 let args = CommandLine.arguments
+
+// Headless mode: `Earwig --process-pair <mic> <system> [micOffsetSeconds]`
+// runs the two-channel pipeline on raw channel captures. Used for testing and
+// for salvaging interrupted recordings.
+if let flagIndex = args.firstIndex(of: "--process-pair"), args.count > flagIndex + 2 {
+    let micURL = URL(fileURLWithPath: (args[flagIndex + 1] as NSString).expandingTildeInPath)
+    let systemURL = URL(fileURLWithPath: (args[flagIndex + 2] as NSString).expandingTildeInPath)
+    let micOffset = args.count > flagIndex + 3 ? (Double(args[flagIndex + 3]) ?? 0) : 0
+    let config = Config.load()
+    config.ensureFolders()
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var exitCode: Int32 = 0
+    Task {
+        do {
+            let baseName = micURL.deletingPathExtension().lastPathComponent
+            let samplesDir = config.audioFolderURL.appendingPathComponent(
+                "\(baseName)-pair-speakers", isDirectory: true)
+            let channels = Recorder.ChannelFiles(
+                mic: micURL, system: systemURL,
+                directory: micURL.deletingLastPathComponent(), micOffset: micOffset)
+            print("Two-channel processing (mic offset \(micOffset)s)...")
+            let result = try await Transcriber.transcribe(
+                audioURL: micURL, localeIdentifier: config.localeIdentifier,
+                whisperModel: config.effectiveWhisperModel,
+                diarize: config.effectiveDiarization,
+                sampleClipsDir: samplesDir,
+                voiceMatchThreshold: config.effectiveVoiceMatchThreshold,
+                channels: channels)
+            if let speakers = result.speakerCount { print("Speakers: \(speakers)") }
+            let notes = TranscriptNote.markdown(
+                transcript: result.text,
+                meetingDate: Date(),
+                duration: 0,
+                apps: ["manual --process-pair run"],
+                speakerCount: result.speakerCount,
+                speakerSamples: result.speakerSamples.map {
+                    ($0.speaker, AppDelegate.notePath(for: $0.url, notesFolder: config.notesFolderURL))
+                })
+            let stampFormatter = DateFormatter()
+            stampFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
+            let noteURL = config.notesFolderURL
+                .appendingPathComponent("meeting-\(stampFormatter.string(from: Date())).md")
+            try notes.write(to: noteURL, atomically: true, encoding: .utf8)
+            for record in result.speakerRecords {
+                SpeakerCatalog.shared.addAppearance(
+                    id: record.recordID, noteFile: noteURL.lastPathComponent, label: record.label)
+            }
+            print("Note written: \(noteURL.path)")
+        } catch {
+            print("FAILED: \(error)")
+            exitCode = 1
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    exit(exitCode)
+}
+
 if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 {
     let audioURL = URL(fileURLWithPath: (args[flagIndex + 1] as NSString).expandingTildeInPath)
     let config = Config.load()

@@ -23,6 +23,18 @@ final class Recorder {
     private(set) var isRecording = false
     private(set) var startedAt: Date?
 
+    /// The raw per-channel captures from the most recent recording, kept for
+    /// two-channel processing. `micOffset` is how many seconds after the
+    /// system channel the microphone channel began.
+    struct ChannelFiles {
+        let mic: URL
+        let system: URL
+        let directory: URL
+        let micOffset: TimeInterval
+    }
+    private(set) var lastChannels: ChannelFiles?
+    private var micStartDate: Date?
+
     private let engine = AVAudioEngine()
     private var micFile: AVAudioFile?
     private let systemTap = SystemAudioTap()
@@ -64,6 +76,7 @@ final class Recorder {
         }
         engine.prepare()
         try engine.start()
+        micStartDate = Date()
     }
 
     /// Stops both captures and returns the merged m4a written to `destination`.
@@ -75,7 +88,15 @@ final class Recorder {
         engine.stop()
         micFile = nil
 
+        let systemStartDate = systemTap.fileStartDate
         systemTap.stop()
+
+        var micOffset: TimeInterval = 0
+        if let micStartDate, let systemStartDate {
+            micOffset = max(0, micStartDate.timeIntervalSince(systemStartDate))
+        }
+        lastChannels = ChannelFiles(
+            mic: micURL, system: systemURL, directory: workDir, micOffset: micOffset)
 
         try await merge(to: destination)
         Log.info("Recording stopped, merged to \(destination.path)")

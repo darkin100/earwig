@@ -25,6 +25,9 @@ final class SystemAudioTap {
     private var tapFormat: AVAudioFormat?
     private var loggedWriteError = false
     private var rateListener: AudioObjectPropertyListenerBlock?
+    /// Wall-clock moment the first buffer was written — used to align the
+    /// system channel's timeline with the microphone channel's.
+    private(set) var fileStartDate: Date?
     private let queue = DispatchQueue(label: "io.darkin.earwig.systemtap")
 
     func start(writingTo url: URL) throws {
@@ -124,6 +127,7 @@ final class SystemAudioTap {
                             settings: format.settings,
                             commonFormat: .pcmFormatFloat32,
                             interleaved: interleaved)
+                        self.fileStartDate = Date()
                         Log.info("system tap writing \(channels)ch \(interleaved ? "interleaved" : "deinterleaved") @ \(Int(effectiveRate))Hz (device rate)")
                     } catch {
                         Log.info("system tap: could not create file: \(error)")

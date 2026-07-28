@@ -361,6 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             updateIcon(); updateStatusLine()
 
             let cfg = config
+            let channels = recorder.lastChannels
             pipelineChain = Task(priority: .utility) { [previous = pipelineChain] in
                 await previous.value
                 await self.waitUntilNoLiveMeeting()
@@ -368,7 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                     audioURL: audioURL, startedAt: startedAt, duration: duration,
                     apps: apps, meetingTitle: meetingTitle, windowTitles: windowTitles,
                     userNotes: userNotes, notesStashURL: notesStashURL,
-                    stamp: stamp, config: cfg)
+                    stamp: stamp, config: cfg, channels: channels)
             }
         }
     }
@@ -407,7 +408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         audioURL: URL, startedAt: Date, duration: TimeInterval,
         apps: [String], meetingTitle: String?, windowTitles: [String],
         userNotes: String, notesStashURL: URL,
-        stamp: String, config cfg: Config
+        stamp: String, config cfg: Config,
+        channels: Recorder.ChannelFiles? = nil
     ) async {
         do {
             let samplesDir = cfg.audioFolderURL.appendingPathComponent(
@@ -417,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 whisperModel: cfg.effectiveWhisperModel,
                 diarize: cfg.effectiveDiarization,
                 sampleClipsDir: samplesDir,
-                voiceMatchThreshold: cfg.effectiveVoiceMatchThreshold)
+                voiceMatchThreshold: cfg.effectiveVoiceMatchThreshold,
+                channels: channels)
             let notes = TranscriptNote.markdown(
                 transcript: result.text,
                 meetingDate: startedAt,
@@ -439,6 +442,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             }
             if !cfg.keepAudio {
                 try? FileManager.default.removeItem(at: audioURL)
+            }
+            // The raw per-channel captures served their purpose — clean up
+            // the temp dir (kept on failure for salvage).
+            if let channels {
+                try? FileManager.default.removeItem(at: channels.directory)
             }
             Log.info("Note written: \(noteURL.path)")
             await MainActor.run {
