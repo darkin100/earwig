@@ -24,7 +24,7 @@ enum Transcriber {
     }
 
     struct Output {
-        let text: String
+        var text: String
         /// Number of distinct speakers found by diarization; nil if diarization
         /// was disabled, failed, or the engine produced no timestamps.
         let speakerCount: Int?
@@ -51,6 +51,17 @@ enum Transcriber {
             whisperModel: whisperModel, diarize: diarize,
             sampleClipsDir: sampleClipsDir,
             voiceMatchThreshold: voiceMatchThreshold, channels: channels)
+
+        // Deterministic dictionary corrections for known mis-hearings.
+        let vocabulary = Vocabulary.current()
+        if !vocabulary.corrections.isEmpty {
+            let (corrected, count) = Vocabulary.applyCorrections(
+                vocabulary.corrections, to: output.text)
+            if count > 0 {
+                output.text = corrected
+                Log.info("Applied \(count) dictionary correction(s)")
+            }
+        }
 
         // Context-aware repair of obvious mis-recognitions, on-device.
         if repairTranscript, output.text.contains("**") {
@@ -338,6 +349,7 @@ enum Transcriber {
         if let language = locale.language.languageCode?.identifier {
             options.language = language
         }
+        primeWithVocabulary(&options, pipeline: pipeline)
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)
         let segments = results.flatMap(\.segments)
@@ -350,6 +362,18 @@ enum Transcriber {
                     text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.text.isEmpty }
             .sorted { $0.start < $1.start }
+    }
+
+    /// Biases Whisper's decoder toward the user dictionary (names, product
+    /// and technology terms) via its priming-prompt mechanism.
+    private static func primeWithVocabulary(_ options: inout DecodingOptions, pipeline: WhisperKit) {
+        guard let prompt = Vocabulary.whisperPrompt(terms: Vocabulary.current().terms),
+              let tokenizer = pipeline.tokenizer else { return }
+        let tokens = tokenizer.encode(text: " " + prompt)
+            .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        guard !tokens.isEmpty else { return }
+        options.promptTokens = tokens
+        options.usePrefillPrompt = true
     }
 
     /// Whisper hallucinates stock phrases ("Jesus.", "Thank you.") over
@@ -418,6 +442,7 @@ enum Transcriber {
         if let language = locale.language.languageCode?.identifier {
             options.language = language
         }
+        primeWithVocabulary(&options, pipeline: pipeline)
 
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)

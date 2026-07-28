@@ -43,6 +43,7 @@ struct SettingsView: View {
     @State private var whisperModel: String
     @State private var enableDiarization: Bool
     @State private var enableTranscriptRepair: Bool
+    @State private var vocabularyText: String
     @State private var saved = false
     @State private var unidentifiedCount = SpeakerCatalog.shared.all()
         .filter { ($0.name ?? "").isEmpty }.count
@@ -65,6 +66,7 @@ struct SettingsView: View {
         _whisperModel = State(initialValue: config.effectiveWhisperModel)
         _enableDiarization = State(initialValue: config.effectiveDiarization)
         _enableTranscriptRepair = State(initialValue: config.effectiveTranscriptRepair)
+        _vocabularyText = State(initialValue: (config.vocabulary ?? []).joined(separator: "\n"))
     }
 
     private var modelChoices: [(id: String, label: String)] {
@@ -102,6 +104,17 @@ struct SettingsView: View {
                     .disabled(!TranscriptRepair.isAvailable)
                 if !TranscriptRepair.isAvailable {
                     Text("Requires Apple Intelligence to be enabled on this Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Dictionary") {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextEditor(text: $vocabularyText)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(height: 90)
+                    Text("Terms speech-to-text gets wrong — one per line. Plain terms bias recognition (\"Orbit\"); pairs fix known mis-hearings (\"Zurb -> Azure\"). Named speakers are included automatically.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -179,6 +192,10 @@ struct SettingsView: View {
         config.whisperModel = whisperModel
         config.enableDiarization = enableDiarization
         config.enableTranscriptRepair = enableTranscriptRepair
+        config.vocabulary = vocabularyText
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
         config.save()
         config.ensureFolders()
         Log.info("Settings saved")

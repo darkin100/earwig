@@ -183,18 +183,28 @@ if let flagIndex = args.firstIndex(of: "--repair-note"), args.count > flagIndex 
                 return
             }
             let content = try String(contentsOf: noteURL, encoding: .utf8)
-            guard let range = content.range(of: "## Transcript") else {
+            // Keep the heading out of the model's input — it once "helpfully"
+            // renamed the section.
+            let parts = content.components(separatedBy: "## Transcript\n")
+            guard parts.count == 2 else {
                 print("No '## Transcript' section found in \(noteURL.lastPathComponent)")
                 exitCode = 1
                 semaphore.signal()
                 return
             }
-            let head = String(content[..<range.lowerBound])
-            let transcript = String(content[range.lowerBound...])
+            let head = parts[0] + "## Transcript\n"
+            let transcript = parts[1]
             let names = TranscriptRepair.speakerNames(in: transcript)
             print("Repairing transcript (\(transcript.count) chars, speakers: \(names.joined(separator: ", ")))...")
+            var working = transcript
+            let vocabulary = Vocabulary.current()
+            let (corrected, count) = Vocabulary.applyCorrections(vocabulary.corrections, to: working)
+            if count > 0 {
+                working = corrected
+                print("Applied \(count) dictionary correction(s)")
+            }
             if let repaired = await TranscriptRepair.repair(
-                transcript: transcript, speakerNames: names) {
+                transcript: working, speakerNames: names) {
                 var newHead = head
                 if !newHead.contains("transcript_cleanup:"),
                    let statusRange = newHead.range(of: "status: raw-transcript") {
@@ -203,6 +213,9 @@ if let flagIndex = args.firstIndex(of: "--repair-note"), args.count > flagIndex 
                 }
                 try (newHead + repaired).write(to: noteURL, atomically: true, encoding: .utf8)
                 print("Repairs applied and saved.")
+            } else if working != transcript {
+                try (head + working).write(to: noteURL, atomically: true, encoding: .utf8)
+                print("Dictionary corrections saved.")
             } else {
                 print("No repairs needed (or model unavailable).")
             }

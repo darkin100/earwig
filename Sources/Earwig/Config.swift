@@ -18,6 +18,9 @@ struct Config: Codable {
     // Repair obvious speech-to-text mis-recognitions with the on-device
     // Apple Intelligence model.
     var enableTranscriptRepair: Bool?
+    // User dictionary: canonical terms ("Orbit") or correction pairs
+    // ("Zurb -> Azure"). Speaker catalogue names are added automatically.
+    var vocabulary: [String]?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
     var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }

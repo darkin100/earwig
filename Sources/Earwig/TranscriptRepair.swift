@@ -42,10 +42,15 @@ enum TranscriptRepair {
         }
 
         let names = speakerNames.filter { !$0.hasPrefix("Speaker ") }
+        let vocabulary = Vocabulary.current().terms.filter { !names.contains($0) }
+        let glossaryLine = vocabulary.isEmpty ? "" : """
+
+        - Domain glossary — when the audio plausibly meant one of these terms, use this exact spelling: \(vocabulary.prefix(40).joined(separator: ", ")).
+        """
         let instructions = """
         You repair speech-to-text errors in a meeting transcript. Rules:
         - Fix only obvious mis-recognitions where the surrounding context makes the intended word clear. Examples: "the servility" -> "the observability" in a discussion of platform capabilities; "in the Zurb" -> "in Azure" when discussing cloud hosting.
-        - When a name is misheard or misspelled, correct it to exactly match one of the participants: \(names.isEmpty ? "unknown" : names.joined(separator: ", ")). For example "glenn" or "Glen" -> "Glyn" if Glyn is a participant. Never invent names not in the list.
+        - When a name is misheard or misspelled, correct it to exactly match one of the participants: \(names.isEmpty ? "unknown" : names.joined(separator: ", ")). For example "glenn" or "Glen" -> "Glyn" if Glyn is a participant. Never invent names not in the list.\(glossaryLine)
         - Preserve everything else exactly as written: the same sentences, the same order, the same wording, and the same "**Name:**" speaker markers. Never summarise, rephrase, reorder, add, or remove content. Keep hesitations and informal speech as they are.
         - If nothing needs fixing, output the text unchanged.
         - Output only the corrected transcript text, nothing else.
@@ -93,7 +98,13 @@ enum TranscriptRepair {
         let ratio = Double(candidate.count) / Double(max(1, original.count))
         guard ratio > 0.7, ratio < 1.3 else { return false }
         let markerCount = { (s: String) in s.components(separatedBy: "**").count }
-        return markerCount(original) == markerCount(candidate)
+        guard markerCount(original) == markerCount(candidate) else { return false }
+        // Markdown headings must survive verbatim (the model once renamed
+        // "## Transcript" to "## Corrected Transcript").
+        let headings = { (s: String) in
+            s.split(separator: "\n").filter { $0.hasPrefix("#") }
+        }
+        return headings(original) == headings(candidate)
     }
 
     /// Speaker names as they appear in a turn-formatted transcript.
