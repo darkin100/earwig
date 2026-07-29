@@ -6,9 +6,10 @@ import Foundation
 /// Entries in config's `vocabulary` are either a canonical term ("Orbit",
 /// "Glyn Darkin") or an explicit correction pair ("Zurb -> Azure"). Names
 /// from the speaker catalogue are always included automatically. The terms
-/// feed three stages: Whisper's priming prompt (hear it right), determinis-
-/// tic word-boundary corrections (fix known offenders), and the on-device
-/// repair model's glossary (snap context repairs to exact spellings).
+/// feed two stages: deterministic word-boundary corrections (fix known
+/// offenders) and the on-device repair model's glossary (snap context
+/// repairs to exact spellings). Whisper decoder priming was removed — see
+/// the note in Transcriber.swift: prompts make WhisperKit drop real speech.
 enum Vocabulary {
     struct Current {
         let terms: [String]
@@ -45,12 +46,6 @@ enum Vocabulary {
             }
         }
         return Current(terms: terms, corrections: corrections)
-    }
-
-    /// Whisper priming text — biases recognition toward the glossary.
-    static func whisperPrompt(terms: [String]) -> String? {
-        guard !terms.isEmpty else { return nil }
-        return "Glossary: " + terms.prefix(40).joined(separator: ", ") + "."
     }
 
     /// Case-insensitive word-boundary replacement of known mis-hearings.

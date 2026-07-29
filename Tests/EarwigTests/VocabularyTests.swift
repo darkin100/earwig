@@ -31,13 +31,4 @@ struct VocabularyTests {
         #expect(fixed == "deploying A$B now; also axb stays")
         #expect(count == 1)
     }
-
-    @Test func whisperPromptIsCappedAndNilWhenEmpty() {
-        #expect(Vocabulary.whisperPrompt(terms: []) == nil)
-        let many = (1...60).map { "Term\($0)" }
-        let prompt = Vocabulary.whisperPrompt(terms: many)!
-        #expect(prompt.hasPrefix("Glossary: Term1, "))
-        #expect(prompt.contains("Term40"))
-        #expect(!prompt.contains("Term41"))
-    }
 }

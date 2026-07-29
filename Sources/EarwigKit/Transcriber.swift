@@ -394,7 +394,6 @@ enum Transcriber {
         if let language = locale.language.languageCode?.identifier {
             options.language = language
         }
-        primeWithVocabulary(&options, pipeline: pipeline)
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)
         let segments = results.flatMap(\.segments)
@@ -409,17 +408,13 @@ enum Transcriber {
             .sorted { $0.start < $1.start }
     }
 
-    /// Biases Whisper's decoder toward the user dictionary (names, product
-    /// and technology terms) via its priming-prompt mechanism.
-    private static func primeWithVocabulary(_ options: inout DecodingOptions, pipeline: WhisperKit) {
-        guard let prompt = Vocabulary.whisperPrompt(terms: Vocabulary.current().terms),
-              let tokenizer = pipeline.tokenizer else { return }
-        let tokens = tokenizer.encode(text: " " + prompt)
-            .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
-        guard !tokens.isEmpty else { return }
-        options.promptTokens = tokens
-        options.usePrefillPrompt = true
-    }
+    // NOTE: Do not prime Whisper's decoder with the user dictionary
+    // (options.promptTokens). With WhisperKit 1.0.0 + large-v3-turbo + VAD
+    // chunking, any conditioning prompt — even a single term, and with every
+    // confidence gate disabled — makes the decoder end windows early and
+    // silently drop the majority of real speech (measured 12,085 -> ~1,800
+    // chars on a 17-minute meeting). The dictionary is applied downstream
+    // instead: deterministic corrections and the repair model's glossary.
 
     /// Whisper hallucinates stock phrases ("Jesus.", "Thank you.") over
     /// non-speech audio, and loops phrases when decoding degrades. Its own
@@ -496,7 +491,6 @@ enum Transcriber {
         if let language = locale.language.languageCode?.identifier {
             options.language = language
         }
-        primeWithVocabulary(&options, pipeline: pipeline)
 
         let results = try await pipeline.transcribe(
             audioPath: audioURL.path, decodeOptions: options)
