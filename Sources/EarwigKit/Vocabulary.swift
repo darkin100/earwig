@@ -5,11 +5,17 @@ import Foundation
 ///
 /// Entries in config's `vocabulary` are either a canonical term ("Orbit",
 /// "Glyn Darkin") or an explicit correction pair ("Zurb -> Azure"). Names
-/// from the speaker catalogue are always included automatically. The terms
-/// feed two stages: deterministic word-boundary corrections (fix known
-/// offenders) and the on-device repair model's glossary (snap context
-/// repairs to exact spellings). Whisper decoder priming was removed — see
-/// the note in Transcriber.swift: prompts make WhisperKit drop real speech.
+/// from the speaker catalogue are always included automatically.
+///
+/// The two entry kinds drive two separate stages and do not overlap:
+/// correction pairs are applied as deterministic word-boundary replacements,
+/// while canonical terms (plus catalogue names) become the on-device repair
+/// model's glossary. A pair's target is never added to that glossary — the
+/// deterministic pass already handles it, and every extra glossary term is
+/// something the repair model may pull unrelated words toward.
+///
+/// Whisper decoder priming was removed — see the note in Transcriber.swift:
+/// prompts make WhisperKit drop real speech.
 enum Vocabulary {
     struct Current {
         let terms: [String]
@@ -38,8 +44,12 @@ enum Vocabulary {
             let parts = raw.components(separatedBy: "->")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             if parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty {
+                // Deliberately NOT added to `terms`: a correction pair is
+                // already applied deterministically, and putting its target in
+                // the repair model's glossary makes that model pull unrelated
+                // words toward it — "GCP"/"GCVE" were rewritten to "Azure"
+                // purely because "Zurb -> Azure" put Azure in the glossary.
                 corrections.append((wrong: parts[0], right: parts[1]))
-                if !terms.contains(parts[1]) { terms.append(parts[1]) }
             } else {
                 let term = raw.trimmingCharacters(in: .whitespaces)
                 if !term.isEmpty, !terms.contains(term) { terms.append(term) }

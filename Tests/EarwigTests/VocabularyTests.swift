@@ -3,14 +3,17 @@ import Testing
 
 @testable import EarwigKit
 
-/// The user dictionary: entry parsing, deterministic corrections, and the
-/// Whisper priming prompt.
+/// The user dictionary: entry parsing and deterministic corrections.
+/// (Whisper priming was removed — it made the decoder drop real speech.)
 struct VocabularyTests {
     @Test func parsesTermsAndCorrectionPairs() {
         let parsed = Vocabulary.parse(entries: [
             "Orbit", "  ClearRoute  ", "Zurb -> Azure", "glenn -> Glyn", "", "  ",
         ])
-        #expect(parsed.terms == ["Orbit", "ClearRoute", "Azure", "Glyn"])
+        // A correction pair's target stays out of `terms`: the pair is applied
+        // deterministically, and glossary entries pull the repair model toward
+        // them (it rewrote "GCP" to "Azure" when Azure was in the glossary).
+        #expect(parsed.terms == ["Orbit", "ClearRoute"])
         #expect(parsed.corrections.map(\.wrong) == ["Zurb", "glenn"])
         #expect(parsed.corrections.map(\.right) == ["Azure", "Glyn"])
     }
