@@ -4,10 +4,12 @@ A macOS menu bar app that listens for meetings (Microsoft Teams, Google Meet, Sl
 
 Earwig deliberately stops at speech-to-text. Summarisation, action items, and any further processing happen downstream — point your own tooling (an LLM workflow, a Claude Cowork project, a shell script) at the notes folder.
 
+More detail lives in [`docs/`](docs/): [the processing pipeline](docs/pipeline.md) as diagrams, and [where audio is stored and when it is deleted](docs/audio-storage.md).
+
 ## How it works
 
 1. **Detect** — polls CoreAudio every 2s for *per-process* microphone usage. When a known meeting app starts capturing the mic, a floating *"Meeting detected — Record / Ignore"* panel appears (top-right of screen).
-2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`.
+2. **Record** — your mic via `AVAudioEngine` + everyone else via a CoreAudio process tap (system audio only — no screen access). The two streams are merged into one `.m4a`. A mic that isn't ready — typically a Bluetooth headset switching into call mode as the meeting starts — is retried briefly and then falls back to the built-in microphone, so a device in flux degrades the recording rather than losing it.
 3. **Titles** *(optional, needs Accessibility)* — while recording, Earwig reads the meeting apps' window titles and identifies the call window (Teams meeting subject, Google Meet tab, Zoom topic, Slack huddle). The best candidate becomes the note's `title:`; all captured titles are listed under `window_titles:` for downstream context.
 4. **Auto-stop** — a call is considered ended when no *meeting app* has held the microphone for `autoStopGraceSeconds` (default 30s); the recording then stops and processing begins. With Accessibility granted there's a faster signal too: once every tracked call window has closed *and* the mic is free, recording stops after ~10s instead of the full grace period. Each call becomes its own recording and transcript — a new call after the grace window gets a fresh detection prompt, even while the previous one is still transcribing. A quick handoff *within* the grace window (e.g. Teams call rolling into a WhatsApp call) stays one session, and every app that joined is listed in the note's `source:`. Unrelated mic users (dictation tools, a stray browser tab) can't keep a session alive. If the call is on an app Earwig doesn't recognise, it falls back to stopping when the mic is released entirely; manual recordings with nothing on the mic never auto-stop.
 5. **Transcribe** — on-device with **Whisper large-v3 turbo** via [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML, VAD chunking). The model (~1.5 GB) is downloaded on first transcription and cached under Application Support. If Whisper fails — or `whisperModel` is set to `"apple"` — it falls back to the macOS 26 `SpeechAnalyzer` API, then `SFSpeechRecognizer`. Audio never leaves your Mac either way. Transcription runs in the background at utility priority, and **defers while any meeting is live** — if you jump straight into the next call, processing waits until you're done (the menu shows "Transcription queued"). All CoreML work (Whisper + diarization) is pinned to CPU + Neural Engine, leaving the GPU free for your meeting's video.
@@ -85,7 +87,9 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
   "autoStopGraceSeconds": 30,
   "whisperModel": "large-v3-v20240930_turbo",
   "enableDiarization": true,
-  "voiceMatchThreshold": 0.6
+  "voiceMatchThreshold": 0.6,
+  "enableTranscriptRepair": true,
+  "vocabulary": ["Orbit", "Zurb -> Azure"]
 }
 ```
 
@@ -96,6 +100,8 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 - `vocabulary` — user dictionary: a list of canonical terms ("Orbit") and correction pairs ("Zurb -> Azure") for words speech-to-text gets wrong. Speaker-catalogue names are added automatically.
 - `enableDiarization` — label transcript turns with anonymous `Speaker N` voices (default `true`); set `false` for a flat transcript.
 - `voiceMatchThreshold` — how similar a voice must be to a catalogued speaker to count as the same person (default 0.6; raise it if different people get merged, lower it if the same person keeps appearing as new).
+- `enableTranscriptRepair` — fix obvious mis-recognitions with Apple's on-device Foundation Model (default `true`); silently skipped when Apple Intelligence is unavailable.
+- `audioFolder` — where recordings and speaker sample clips are written; keep it inside `notesFolder` so the relative `speaker_samples` paths in the frontmatter resolve.
 - `whisperModel` — WhisperKit model variant (default `large-v3-v20240930_turbo`). Smaller/faster options include `large-v3-v20240930_626MB` or `distil-large-v3`; set to `"apple"` to skip Whisper and use the built-in macOS speech model.
 
 ## Menu bar
@@ -103,16 +109,25 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 - **Start/Stop Recording** (⌘R) — manual control; the icon is a red dot while recording, a waveform while transcribing.
 - **Show Meeting Notes** (⌘N, while recording) — reopens the live notes sidebar if you closed it. The sidebar docks to the right edge when recording starts; anything you type is added to the transcript note under *"Notes (taken live during the meeting)"* (frontmatter: `has_live_notes: true`) and is stashed to a `-livenotes.txt` file next to the audio until the note is safely written.
 - **Simulate Meeting Detection** — test the prompt without a real meeting.
-- **Settings…** (⌘,) — folders, keep-audio, transcription model, language, diarization, auto-stop grace, and an Open Log button, in a native settings window. (The JSON config below remains the source of truth for anything exotic.)
+- **Settings…** (⌘,) — folders, keep-audio, transcription model, language, diarization, transcript repair, the user dictionary, **Speaker Identification…**, auto-stop grace, and an Open Log button, in a native settings window. (The JSON config below remains the source of truth for anything exotic.)
 - **Open Notes Folder**
 
-## Tests
+## Tests & evals
 
 ```sh
 swift run earwig-tests
 ```
 
-Swift Testing suite covering the pipeline's pure logic: hallucination gates, echo detection, speaker attribution, dictionary corrections, repair guardrails, the note format contract, and config compatibility — including regression fixtures captured from real meeting failures. (The runner is an executable because SwiftPM's `swift test` cannot drive swift-testing on bare Command Line Tools installs.)
+Swift Testing suite covering the pipeline's pure logic — hallucination gates, echo detection, speaker attribution, dictionary corrections, repair guardrails, the note format contract, config compatibility — plus the audio-capture safety net (a raised Objective-C exception must arrive as a Swift error rather than aborting the app). Includes regression fixtures captured from real meeting failures. (The runner is an executable because SwiftPM's `swift test` cannot drive swift-testing on bare Command Line Tools installs.)
+
+Unit tests can't tell you whether the pipeline quietly stopped transcribing half a meeting, so [`evals/`](evals/README.md) scores the real pipeline against captured recordings:
+
+```sh
+python3 evals/run_eval.py              # quick tier, before any pipeline change
+python3 evals/run_eval.py --tier full  # before touching transcription/diarization/echo logic
+```
+
+Each case must reproduce a plain-Whisper reference transcript (measured as token-trigram recall), which catches the failure mode that has bitten twice: an "enhancement" silently deleting real dialogue. The audio is private and stays out of the repo — see [`evals/README.md`](evals/README.md) for the store layout.
 
 ## Headless modes
 
@@ -137,7 +152,7 @@ Swift Testing suite covering the pipeline's pure logic: hallucination gates, ech
 ./Earwig.app/Contents/MacOS/Earwig --set-speaker-name <id-prefix> "Sarah"
 ```
 
-If a recording is interrupted (crash, force quit), the raw captures survive in a `$TMPDIR/earwig-*` folder — `--merge` then `--process` recovers the meeting.
+If a recording is interrupted (crash, force quit), the raw captures survive in a `$TMPDIR/earwig-*` folder. Prefer `--process-pair mic.caf system.caf` to recover it, which keeps the two-channel path (separate diarization per channel); `--merge` then `--process` also works but collapses both sides into one mixed track first.
 
 ## Privacy
 
@@ -148,5 +163,5 @@ If a recording is interrupted (crash, force quit), the raw captures survive in a
 ## Known limitations
 
 - Browser detection is per-process, not per-tab: any mic use by Chrome/Safari/Arc/Edge/Brave/Firefox may prompt, whether or not it's Google Meet. Dedicated apps take precedence in the prompt label.
-- Transcription quality is Apple's on-device model; far-field/multi-speaker audio can get rough.
+- Transcription quality is Whisper large-v3 turbo running locally; far-field and heavily overlapping speech can still get rough.
 - The log file (`~/Library/Application Support/Earwig/earwig.log`) grows unbounded; delete it whenever.
