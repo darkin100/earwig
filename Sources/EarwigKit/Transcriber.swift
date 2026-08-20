@@ -205,25 +205,24 @@ enum Transcriber {
         var (systemSegments, systemEmbeddings) = renumbered(systemOutcome)
         var (micSegments, micEmbeddings) = renumbered(micOutcome)
 
-        // Cross-channel echo suppression: a mic-channel voice whose embedding
-        // matches a system-channel voice IS that remote participant leaking
-        // through the speakers into the microphone. The system channel is
-        // authoritative for remote voices — drop the mic cluster entirely so
-        // it can't duplicate text or spawn a phantom catalogue entry.
-        var echoLabels: Set<String> = []
-        for (micLabel, micEmbedding) in micEmbeddings {
-            var best: (label: String, similarity: Double)?
-            for (systemLabel, systemEmbedding) in systemEmbeddings {
-                let similarity = SpeakerCatalog.cosineSimilarity(micEmbedding, systemEmbedding)
-                if similarity > (best?.similarity ?? 0) {
-                    best = (systemLabel, similarity)
-                }
-            }
-            if let best, best.similarity >= 0.65 {
-                echoLabels.insert(micLabel)
-                Log.info("Mic voice \(micLabel) is an echo of \(best.label) (similarity \(String(format: "%.2f", best.similarity))) — dropping it")
-            }
+        // Cross-channel echo suppression — see echoDecision() for the rules.
+        var micDurations: [String: Double] = [:]
+        for segment in micSegments {
+            micDurations[segment.speaker, default: 0] += segment.end - segment.start
         }
+        let decision = echoDecision(
+            micEmbeddings: micEmbeddings, systemEmbeddings: systemEmbeddings,
+            micDurations: micDurations)
+        for match in decision.matches {
+            Log.info("Mic voice \(match.mic) is an echo of \(match.system) (similarity \(String(format: "%.2f", match.similarity))) — dropping it")
+        }
+        if let local = decision.protectedLocal {
+            Log.info("Mic voice \(local) owns the microphone (most speech on that channel) — kept even though it matches a system voice")
+        }
+        if let fraction = decision.refusedFraction {
+            Log.info("WARNING: echo suppression would have dropped \(Int(fraction * 100))% of the microphone channel — refusing and keeping it, this is a misfire not an echo")
+        }
+        let echoLabels = decision.labels
         micEmbeddings = micEmbeddings.filter { !echoLabels.contains($0.key) }
 
         var allEmbeddings = systemEmbeddings.merging(micEmbeddings) { a, _ in a }
@@ -275,15 +274,24 @@ enum Transcriber {
         //    Fuzzy token overlap, since Whisper transcribes the two copies of
         //    the same words slightly differently.
         let beforeEcho = micAttributed.count
-        micAttributed = micAttributed.filter { mic in
+        let deduped = micAttributed.filter { mic in
             !systemAttributed.contains { sys in
                 let overlap = min(mic.end, sys.end) - max(mic.start, sys.start)
                 guard overlap > 0.4 * max(0.1, mic.end - mic.start) else { return false }
                 return isDuplicateText(mic.text, sys.text)
             }
         }
-        if micAttributed.count != beforeEcho {
-            Log.info("Echo guard dropped \(beforeEcho - micAttributed.count) duplicated mic segment(s)")
+        // Same reasoning as the embedding-level cap: a guard that wants to
+        // delete most of what you said is misfiring (it removed 538 of 841
+        // segments on 2026-07-29), and duplicated text is a far better
+        // outcome than missing speech.
+        if beforeEcho > 0, Double(beforeEcho - deduped.count) / Double(beforeEcho) > 0.6 {
+            Log.info("WARNING: echo guard would have dropped \(beforeEcho - deduped.count) of \(beforeEcho) mic segment(s) — refusing and keeping them, this is a misfire not an echo")
+        } else {
+            if deduped.count != beforeEcho {
+                Log.info("Echo guard dropped \(beforeEcho - deduped.count) duplicated mic segment(s)")
+            }
+            micAttributed = deduped
         }
 
         // 6. Interleave into one timeline and fold into speaker turns.
@@ -363,6 +371,80 @@ enum Transcriber {
                 start: segment.start, end: segment.end, text: segment.text, speaker: speaker))
         }
         return result
+    }
+
+    /// Which mic-channel voices are echoes of system-channel voices — the
+    /// remote participants leaking out of the speakers and back into the
+    /// microphone.
+    ///
+    /// The embedding match is symmetric, and that is the trap: when the far
+    /// end's microphones pick up *your* voice and send it back, your own mic
+    /// cluster matches a system cluster just as strongly. Dropping it deletes
+    /// your entire side of the conversation, which is exactly what happened
+    /// on 2026-07-29 (all 757 mic segments, similarities 0.88 and 0.94). Two
+    /// guards make that unrecoverable outcome impossible:
+    ///
+    ///  - the voice that does most of the talking on the mic channel is the
+    ///    person holding the microphone, so it is never an echo;
+    ///  - suppression may never silence most of the mic channel. If it wants
+    ///    to, the rule is misfiring and is dropped wholesale.
+    ///
+    /// Both failure modes degrade safely: a genuine echo that survives is
+    /// caught downstream by the text-level guard, and the worst case is
+    /// duplicated text — visible and fixable, unlike deleted speech.
+    struct EchoDecision {
+        var labels: Set<String> = []
+        var matches: [(mic: String, system: String, similarity: Double)] = []
+        /// The mic voice kept because it owns the microphone, if it would
+        /// otherwise have been dropped.
+        var protectedLocal: String?
+        /// Set when the whole suppression was refused, to the fraction of the
+        /// mic channel it wanted to remove.
+        var refusedFraction: Double?
+    }
+
+    static func echoDecision(
+        micEmbeddings: [String: [Float]],
+        systemEmbeddings: [String: [Float]],
+        micDurations: [String: Double],
+        threshold: Double = 0.65,
+        maxSuppressedFraction: Double = 0.5
+    ) -> EchoDecision {
+        var decision = EchoDecision()
+        // Ties broken by label so the choice is deterministic.
+        let localSpeaker = micDurations
+            .max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+
+        for micLabel in micEmbeddings.keys.sorted() {
+            guard let micEmbedding = micEmbeddings[micLabel] else { continue }
+            var best: (label: String, similarity: Double)?
+            for systemLabel in systemEmbeddings.keys.sorted() {
+                guard let systemEmbedding = systemEmbeddings[systemLabel] else { continue }
+                let similarity = SpeakerCatalog.cosineSimilarity(micEmbedding, systemEmbedding)
+                if similarity > (best?.similarity ?? 0) {
+                    best = (systemLabel, similarity)
+                }
+            }
+            guard let best, best.similarity >= threshold else { continue }
+            if micLabel == localSpeaker {
+                decision.protectedLocal = micLabel
+                continue
+            }
+            decision.labels.insert(micLabel)
+            decision.matches.append(
+                (mic: micLabel, system: best.label, similarity: best.similarity))
+        }
+
+        let total = micDurations.values.reduce(0, +)
+        if total > 0 {
+            let suppressed = decision.labels.reduce(0.0) { $0 + (micDurations[$1] ?? 0) }
+            if suppressed / total > maxSuppressedFraction {
+                decision.refusedFraction = suppressed / total
+                decision.labels.removeAll()
+                decision.matches.removeAll()
+            }
+        }
+        return decision
     }
 
     /// Fuzzy same-words check: containment or strong token overlap.
