@@ -1,0 +1,84 @@
+{
+  "_comment": "Test specification only. Case ids describe the audio's character, never who or when — the mapping back to real meetings lives in CASES.md inside the local eval store, which is never committed.",
+  "eval_store": "~/EarwigEvals",
+  "cases": [
+    {
+      "id": "standup-short",
+      "tier": "quick",
+      "type": "merged",
+      "audio": "audio/case-01.m4a",
+      "duration_min": 5.6,
+      "speakers_expected": [2, 4],
+      "thresholds": { "recall_min": 0.9 }
+    },
+    {
+      "id": "huddle-1to1-echoey",
+      "tier": "quick",
+      "type": "merged",
+      "audio": "audio/case-02.m4a",
+      "duration_min": 16.5,
+      "speakers_expected": [2, 3],
+      "thresholds": { "recall_min": 0.9 },
+      "notes": "1:1 huddle on loudspeakers, heavy speaker leak into the mic. The recording that exposed the Whisper priming truncation."
+    },
+    {
+      "id": "short-call",
+      "tier": "quick",
+      "type": "merged",
+      "audio": "audio/case-03.m4a",
+      "duration_min": 12.4,
+      "speakers_expected": [2, 4],
+      "thresholds": { "recall_min": 0.9 }
+    },
+    {
+      "id": "pair-standup-short",
+      "tier": "quick",
+      "type": "pair",
+      "mic": "audio/pair-01/mic.caf",
+      "system": "audio/pair-01/system.caf",
+      "duration_min": 5.6,
+      "speakers_expected": [2, 4],
+      "thresholds": { "recall_min": 0.85, "mic_unique_recall_min": 0.65, "system_unique_recall_min": 0.65 },
+      "notes": "Raw channel captures — exercises the two-channel path incl. echo suppression."
+    },
+    {
+      "id": "team-meeting",
+      "tier": "full",
+      "type": "merged",
+      "audio": "audio/case-04.m4a",
+      "duration_min": 31.9,
+      "speakers_expected": [2, 6],
+      "thresholds": { "recall_min": 0.9 }
+    },
+    {
+      "id": "four-speaker-call",
+      "tier": "full",
+      "type": "merged",
+      "audio": "audio/case-05.m4a",
+      "duration_min": 22.7,
+      "speakers_expected": [3, 5],
+      "thresholds": { "recall_min": 0.9 }
+    },
+    {
+      "id": "echo-victim-mic-drop",
+      "tier": "full",
+      "type": "merged",
+      "audio": "audio/case-06.m4a",
+      "duration_min": 34.5,
+      "speakers_expected": [2, 5],
+      "thresholds": { "recall_min": 0.9 },
+      "notes": "The recording whose entire mic channel was dropped by echo suppression in a live two-channel run."
+    },
+    {
+      "id": "pair-long-meeting",
+      "tier": "full",
+      "type": "pair",
+      "mic": "audio/pair-02/mic.caf",
+      "system": "audio/pair-02/system.caf",
+      "duration_min": 66.2,
+      "speakers_expected": [2, 6],
+      "thresholds": { "recall_min": 0.85, "mic_unique_recall_min": 0.65, "system_unique_recall_min": 0.65 },
+      "notes": "Long raw channel pair salvaged from a failed pipeline run."
+    }
+  ]
+}

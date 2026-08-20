@@ -1,3 +1,16 @@
 .build/
 Earwig.app/
 .DS_Store
+
+# Python bytecode (the eval harness)
+__pycache__/
+*.pyc
+
+# Eval data is private meeting audio and lives in ~/EarwigEvals, never here.
+# These are belt-and-braces in case anything is ever dropped into evals/.
+evals/audio/
+evals/references/
+evals/results/
+evals/CASES.md
+*.m4a
+*.caf
