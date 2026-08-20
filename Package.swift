@@ -27,9 +27,17 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.4")
     ],
     targets: [
+        // Objective-C shim: converts raised NSExceptions into NSErrors.
+        // AVFoundation reports some invalid-argument cases by raising, which
+        // Swift cannot catch — an uncaught one aborts the process.
+        .target(
+            name: "EarwigObjC",
+            path: "Sources/EarwigObjC"
+        ),
         .target(
             name: "EarwigKit",
             dependencies: [
+                "EarwigObjC",
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio")
             ],
