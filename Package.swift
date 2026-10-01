@@ -7,8 +7,14 @@ import PackageDescription
 // these flags are omitted).
 let cltFrameworks = "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
 let cltHasTesting = FileManager.default.fileExists(atPath: cltFrameworks + "/Testing.framework")
+// The swift-testing macro plugin lives beside the toolchain, not the SDK, so
+// when SDKROOT is pointed at an older SDK (see build.sh) the compiler no
+// longer finds it on its own.
+let cltTestingPlugins = "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
+let cltHasTestingPlugins = FileManager.default.fileExists(atPath: cltTestingPlugins)
 let testingSwiftFlags: [SwiftSetting] =
-    cltHasTesting ? [.unsafeFlags(["-F", cltFrameworks])] : []
+    (cltHasTesting ? [.unsafeFlags(["-F", cltFrameworks])] : [])
+    + (cltHasTestingPlugins ? [.unsafeFlags(["-plugin-path", cltTestingPlugins])] : [])
 let testingLinkerFlags: [LinkerSetting] =
     cltHasTesting
     ? [.unsafeFlags([

@@ -82,16 +82,6 @@ struct SpeakersView: View {
 
     private func row(_ record: SpeakerRecord) -> some View {
         HStack(spacing: 12) {
-            Button {
-                togglePlayback(record)
-            } label: {
-                Image(systemName: playingID == record.id ? "stop.circle.fill" : "play.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-            }
-            .buttonStyle(.plain)
-            .help(playingID == record.id ? "Stop" : "Play voice sample")
-
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     TextField("Add name…", text: draftBinding(record))
@@ -112,15 +102,27 @@ struct SpeakersView: View {
 
             Spacer()
 
-            Button(role: .destructive) {
-                if playingID == record.id { stopPlayback() }
-                SpeakerCatalog.shared.delete(id: record.id)
-                reload()
-            } label: {
-                Image(systemName: "trash")
+            HStack(spacing: 8) {
+                Button {
+                    togglePlayback(record)
+                } label: {
+                    Image(systemName: playingID == record.id ? "stop.circle.fill" : "play.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+                .help(playingID == record.id ? "Stop" : "Play voice sample")
+
+                Button(role: .destructive) {
+                    if playingID == record.id { stopPlayback() }
+                    SpeakerCatalog.shared.delete(id: record.id)
+                    reload()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove this voice and its clip")
             }
-            .buttonStyle(.borderless)
-            .help("Remove this voice and its clip")
         }
         .padding(.vertical, 4)
     }

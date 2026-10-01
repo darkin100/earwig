@@ -6,6 +6,7 @@ import SwiftUI
 /// `onSaved` after every save.
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSaved: (() -> Void)?
+    var onReviewOldAudio: (() -> Void)?
     private var window: NSWindow?
 
     func show() {
@@ -14,7 +15,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let view = SettingsView(onSaved: { [weak self] in self?.onSaved?() })
+        let view = SettingsView(
+            onSaved: { [weak self] in self?.onSaved?() },
+            onReviewOldAudio: { [weak self] in self?.onReviewOldAudio?() })
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Earwig Settings"
@@ -34,10 +37,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
 struct SettingsView: View {
     var onSaved: () -> Void
+    var onReviewOldAudio: () -> Void
 
     @State private var notesFolder: String
     @State private var audioFolder: String
     @State private var keepAudio: Bool
+    @State private var audioRetentionDays: Int
     @State private var localeIdentifier: String
     @State private var autoStopGrace: Int
     @State private var whisperModel: String
@@ -55,18 +60,33 @@ struct SettingsView: View {
         ("apple", "Apple built-in speech model"),
     ]
 
-    init(onSaved: @escaping () -> Void) {
+    private static let retentionChoices: [(days: Int, label: String)] = [
+        (30, "1 month"), (60, "2 months"), (90, "3 months"),
+        (180, "6 months"), (365, "1 year"), (0, "Forever"),
+    ]
+
+    init(onSaved: @escaping () -> Void, onReviewOldAudio: @escaping () -> Void) {
         self.onSaved = onSaved
+        self.onReviewOldAudio = onReviewOldAudio
         let config = Config.load()
         _notesFolder = State(initialValue: config.notesFolder)
         _audioFolder = State(initialValue: config.audioFolder)
         _keepAudio = State(initialValue: config.keepAudio)
+        _audioRetentionDays = State(initialValue: config.effectiveAudioRetentionDays)
         _localeIdentifier = State(initialValue: config.localeIdentifier)
         _autoStopGrace = State(initialValue: config.effectiveAutoStopGrace)
         _whisperModel = State(initialValue: config.effectiveWhisperModel)
         _enableDiarization = State(initialValue: config.effectiveDiarization)
         _enableTranscriptRepair = State(initialValue: config.effectiveTranscriptRepair)
         _vocabularyText = State(initialValue: (config.vocabulary ?? []).joined(separator: "\n"))
+    }
+
+    private var retentionChoices: [(days: Int, label: String)] {
+        var choices = Self.retentionChoices
+        if !choices.contains(where: { $0.days == audioRetentionDays }) {
+            choices.insert((audioRetentionDays, "\(audioRetentionDays) days"), at: 0) // custom value from config.json
+        }
+        return choices
     }
 
     private var modelChoices: [(id: String, label: String)] {
@@ -83,6 +103,20 @@ struct SettingsView: View {
                 folderRow(label: "Notes folder", path: $notesFolder)
                 folderRow(label: "Audio folder", path: $audioFolder)
                 Toggle("Keep audio after transcription", isOn: $keepAudio)
+                Picker("Offer to delete recordings older than", selection: $audioRetentionDays) {
+                    ForEach(retentionChoices, id: \.days) { choice in
+                        Text(choice.label).tag(choice.days)
+                    }
+                }
+                .disabled(!keepAudio)
+                HStack {
+                    Text("You're asked before anything is deleted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Review Old Recordings…") { onReviewOldAudio() }
+                        .help("Uses the saved setting — press Save first if you changed it")
+                }
             }
 
             Section("Transcription") {
@@ -187,6 +221,7 @@ struct SettingsView: View {
         config.notesFolder = notesFolder
         config.audioFolder = audioFolder
         config.keepAudio = keepAudio
+        config.audioRetentionDays = audioRetentionDays
         config.localeIdentifier = localeIdentifier
         config.autoStopGraceSeconds = autoStopGrace
         config.whisperModel = whisperModel

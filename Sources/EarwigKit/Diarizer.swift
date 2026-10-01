@@ -12,6 +12,8 @@ enum Diarizer {
         let speaker: String
         let start: Double
         let end: Double
+        /// Only set on `Outcome.chunks`: that window's own voiceprint.
+        var embedding: [Float]? = nil
     }
 
     struct Outcome {
@@ -19,6 +21,12 @@ enum Diarizer {
         /// Duration-weighted mean voice embedding per speaker label — the
         /// fingerprint used to match voices against the speaker catalogue.
         let meanEmbeddings: [String: [Float]]
+        /// One voiceprint per analysis window per voice (10 s windows, 2 s
+        /// apart), labelled like `segments`. Unlike the segments' own
+        /// embeddings — which FluidAudio sets to the whole cluster's — these
+        /// are measured on that window alone, so they show whether a cluster
+        /// is one voice throughout. See `Transcriber.identify`.
+        var chunks: [SpeakerSegment] = []
     }
 
     // Models load once per app run; the transcription pipeline is serialized
@@ -35,7 +43,9 @@ enum Diarizer {
                 .appendingPathComponent("Earwig/Models/Diarizer", isDirectory: true)
             try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
 
-            let new = OfflineDiarizerManager(config: .default)
+            var config = OfflineDiarizerConfig.default
+            config.exposeChunkEmbeddings = true
+            let new = OfflineDiarizerManager(config: config)
             Log.info("Preparing diarization models (first run downloads them)...")
             // CPU + Neural Engine only — keep the GPU free for live meetings.
             let mlConfiguration = MLModelConfiguration()
@@ -81,8 +91,18 @@ enum Diarizer {
                 meanEmbeddings[label] = sum.map { $0 / norm }
             }
         }
+        // Chunks of clusters that never made it into a segment have no label
+        // and nothing to identify.
+        let chunks = (result.chunkEmbeddings ?? [])
+            .compactMap { chunk -> SpeakerSegment? in
+                guard let index = order[chunk.speakerId], !chunk.embedding256.isEmpty else { return nil }
+                return SpeakerSegment(
+                    speaker: "Speaker \(index)", start: chunk.startTimeSeconds,
+                    end: chunk.endTimeSeconds, embedding: chunk.embedding256)
+            }
+            .sorted { $0.start < $1.start }
         Log.info("Diarization found \(order.count) speaker(s) across \(segments.count) segments")
-        return Outcome(segments: segments, meanEmbeddings: meanEmbeddings)
+        return Outcome(segments: segments, meanEmbeddings: meanEmbeddings, chunks: chunks)
     }
 
     struct SpeakerSample {

@@ -21,12 +21,15 @@ struct Config: Codable {
     // User dictionary: canonical terms ("Orbit") or correction pairs
     // ("Zurb -> Azure"). Speaker catalogue names are added automatically.
     var vocabulary: [String]?
+    // Delete merged recordings older than this many days; 0 keeps them forever.
+    var audioRetentionDays: Int?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
     var effectiveWhisperModel: String { whisperModel ?? "large-v3-v20240930_turbo" }
     var effectiveDiarization: Bool { enableDiarization ?? true }
     var effectiveVoiceMatchThreshold: Double { voiceMatchThreshold ?? 0.6 }
     var effectiveTranscriptRepair: Bool { enableTranscriptRepair ?? true }
+    var effectiveAudioRetentionDays: Int { audioRetentionDays ?? 60 }
 
     static var defaultConfig: Config {
         Config(
@@ -38,7 +41,8 @@ struct Config: Codable {
             whisperModel: "large-v3-v20240930_turbo",
             enableDiarization: true,
             voiceMatchThreshold: 0.6,
-            enableTranscriptRepair: true
+            enableTranscriptRepair: true,
+            audioRetentionDays: 60
         )
     }
 

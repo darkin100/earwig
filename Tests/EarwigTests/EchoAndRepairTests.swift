@@ -114,3 +114,23 @@ struct RepairEnvelopeTests {
         #expect(trailing == "\n\n")
     }
 }
+
+struct RepairSafetyTests {
+    private let original = "**Glyn:** so the deck aligns everyone\n\n**Sam:** yep agreed\n\n**Glyn:** good"
+
+    @Test func aFaithfulRepairIsAccepted() {
+        let candidate = "**Glyn:** So the deck aligns everyone.\n\n**Sam:** Yep, agreed.\n\n**Glyn:** Good."
+        #expect(TranscriptRepair.isSafeRepair(original: original, candidate: candidate))
+    }
+
+    @Test func aRepairThatChangesTheCaseOfASpeakerIsRejected() {
+        // Seen on 2026-09-10: six turns came back as "glyn" and "sam".
+        let candidate = "**glyn:** So the deck aligns everyone.\n\n**sam:** Yep, agreed.\n\n**glyn:** Good."
+        #expect(!TranscriptRepair.isSafeRepair(original: original, candidate: candidate))
+    }
+
+    @Test func aRepairThatSwapsSpeakersIsRejected() {
+        let candidate = "**Sam:** So the deck aligns everyone.\n\n**Glyn:** Yep, agreed.\n\n**Glyn:** Good."
+        #expect(!TranscriptRepair.isSafeRepair(original: original, candidate: candidate))
+    }
+}

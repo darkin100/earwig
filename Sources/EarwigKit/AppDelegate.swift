@@ -48,6 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private var sessionMeetingTitle: String?
     private var windowAccessMenuItem: NSMenuItem!
 
+    // Daily check for recordings past the retention age; the user is asked
+    // before anything is deleted.
+    private var audioCleanupTimer: Timer?
+    private var audioCleanupPromptShowing = false
+    private static let audioCleanupSnoozeKey = "audioCleanupSnoozedUntil"
+    private static let audioCleanupSnooze: TimeInterval = 7 * 24 * 60 * 60
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         config.ensureFolders()
         setupStatusItem()
@@ -60,11 +67,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             self.config = Config.load()
             self.config.ensureFolders()
         }
+        settings.onReviewOldAudio = { [weak self] in
+            self?.offerAudioCleanup(userInitiated: true)
+        }
         meetingNotes.onStop = { [weak self] in
             guard let self, self.recorder.isRecording else { return }
             self.stopRecordingAndProcess()
         }
         detector.start()
+        offerAudioCleanup()
+        audioCleanupTimer = Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
+            self?.offerAudioCleanup()
+        }
         if !WindowMonitor.isTrusted {
             Log.info("Accessibility not granted — meeting titles and window-close detection disabled")
             WindowMonitor.requestTrust()
@@ -147,6 +161,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             symbol = "ear"
             description = "Earwig idle"
             button.contentTintColor = nil
+            // Idle shows Earwig's own ear glyph (bundled by build.sh); the
+            // SF Symbol is the fallback when running outside the app bundle.
+            if let glyph = NSImage(named: "MenuBarIcon") {
+                glyph.isTemplate = true
+                glyph.size = NSSize(width: 18, height: 18)
+                glyph.accessibilityDescription = description
+                button.image = glyph
+                return
+            }
         }
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
     }
@@ -480,6 +503,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         let prefix = notesFolder.standardizedFileURL.path + "/"
         let path = url.standardizedFileURL.path
         return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
+    }
+
+    /// Offers to delete merged recordings past the configured retention age.
+    /// Never deletes without the user's say-so. Automatic checks stay quiet
+    /// while recording and for a week after "Not Now"; a check the user asked
+    /// for from Settings always answers.
+    private func offerAudioCleanup(userInitiated: Bool = false) {
+        guard !audioCleanupPromptShowing else { return }
+        if !userInitiated {
+            if recorder.isRecording { return }
+            let snoozedUntil = UserDefaults.standard.object(forKey: Self.audioCleanupSnoozeKey) as? Date
+            if let snoozedUntil, snoozedUntil > Date() { return }
+        }
+        let folder = config.audioFolderURL
+        let days = config.effectiveAudioRetentionDays
+        Task.detached(priority: .utility) {
+            let candidates = AudioRetention.expired(folder: folder, olderThanDays: days)
+            await MainActor.run {
+                self.promptAudioCleanup(candidates, days: days, userInitiated: userInitiated)
+            }
+        }
+    }
+
+    private func promptAudioCleanup(
+        _ candidates: [AudioRetention.Candidate], days: Int, userInitiated: Bool
+    ) {
+        guard !audioCleanupPromptShowing else { return }
+        if candidates.isEmpty {
+            if userInitiated {
+                let alert = NSAlert()
+                alert.messageText = "No old recordings"
+                alert.informativeText = days > 0
+                    ? "Nothing in the audio folder is older than \(AudioRetention.describe(days: days))."
+                    : "Recordings are set to be kept forever."
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+            return
+        }
+        // An automatic prompt must not interrupt a meeting that began while
+        // the folder was being scanned.
+        if !userInitiated && recorder.isRecording { return }
+
+        let total = candidates.reduce(0) { $0 + $1.bytes }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Delete old meeting recordings?"
+        alert.informativeText = """
+            \(candidates.count) recording\(candidates.count == 1 ? " is" : "s are") older than \
+            \(AudioRetention.describe(days: days)), using \(AudioRetention.formatted(bytes: total)).
+
+            Transcripts and speaker clips are kept. Deleted recordings can't be recovered.
+            """
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Show in Finder")
+        alert.addButton(withTitle: "Not Now")
+        alert.buttons[0].hasDestructiveAction = true
+
+        audioCleanupPromptShowing = true
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        audioCleanupPromptShowing = false
+
+        switch response {
+        case .alertFirstButtonReturn:
+            UserDefaults.standard.removeObject(forKey: Self.audioCleanupSnoozeKey)
+            Task.detached(priority: .utility) {
+                AudioRetention.delete(candidates)
+            }
+        case .alertSecondButtonReturn:
+            NSWorkspace.shared.activateFileViewerSelecting(candidates.map(\.url))
+            snoozeAudioCleanup()
+        default:
+            snoozeAudioCleanup()
+        }
+    }
+
+    private func snoozeAudioCleanup() {
+        UserDefaults.standard.set(
+            Date().addingTimeInterval(Self.audioCleanupSnooze), forKey: Self.audioCleanupSnoozeKey)
     }
 
     private static func fileStamp(for date: Date) -> String {
