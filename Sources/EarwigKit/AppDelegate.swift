@@ -228,7 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 sessionMeetingTitle = pendingMeetingTitle
                 if let pendingMeetingTitle { sessionWindowTitles.insert(pendingMeetingTitle) }
                 pendingMeetingTitle = nil
-                meetingNotes.open(meetingTitle: sessionMeetingTitle)
+                // The notes sidebar is opt-in per call (Show Meeting Notes in
+                // the menu): popping it over every meeting got in the way.
                 autoStopTimer = Timer.scheduledTimer(
                     withTimeInterval: TimeInterval(autoStopTickSeconds), repeats: true
                 ) { [weak self] _ in
