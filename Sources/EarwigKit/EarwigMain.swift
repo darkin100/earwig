@@ -72,6 +72,34 @@ public enum EarwigMain {
             exit(exitCode)
         }
 
+        // Diagnostic mode: `Earwig --diarize <audio> [<audio> ...]` diarizes each
+        // file and prints per-cluster speech totals, pairwise voice similarity,
+        // and the catalogue's top matches — without transcribing or touching
+        // the catalogue. Used to understand why a meeting came out with the
+        // wrong number of speakers.
+        if let flagIndex = args.firstIndex(of: "--diarize"), args.count > flagIndex + 1 {
+            let files = args[(flagIndex + 1)...].map {
+                URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            var exitCode: Int32 = 0
+            Task {
+                for file in files {
+                    do {
+                        print("== \(file.lastPathComponent)")
+                        let outcome = try await Diarizer.diarize(audioURL: file)
+                        print(Transcriber.describeClusters(outcome))
+                    } catch {
+                        print("FAILED: \(error)")
+                        exitCode = 1
+                    }
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            exit(exitCode)
+        }
+
         if let flagIndex = args.firstIndex(of: "--process"), args.count > flagIndex + 1 {
             let audioURL = URL(fileURLWithPath: (args[flagIndex + 1] as NSString).expandingTildeInPath)
             let config = Config.load()

@@ -33,8 +33,7 @@ final class RecordPrompt {
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 
         let icon = NSImageView(frame: NSRect(x: 16, y: height - 48, width: 24, height: 24))
-        icon.image = NSImage(systemSymbolName: "ear.badge.waveform", accessibilityDescription: "Earwig")
-        icon.contentTintColor = .systemRed
+        icon.image = NSApp.applicationIconImage
         content.addSubview(icon)
 
         // With a derived meeting title, lead with it; the generic header

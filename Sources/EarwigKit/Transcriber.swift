@@ -153,7 +153,7 @@ enum Transcriber {
         sampleClipsDir: URL?, voiceMatchThreshold: Double
     ) async throws -> Output {
         // 1. Whisper each channel independently.
-        let systemWhisper = try await whisperRawSegments(
+        let systemWhisperRaw = try await whisperRawSegments(
             audioURL: channels.system, locale: locale, model: model)
         var micWhisper = try await whisperRawSegments(
             audioURL: channels.mic, locale: locale, model: model)
@@ -172,10 +172,10 @@ enum Transcriber {
                 Log.info("Energy gate dropped \(before - micWhisper.count) mic segment(s) below the speech floor")
             }
         }
-        guard !(systemWhisper.isEmpty && micWhisper.isEmpty) else {
+        guard !(systemWhisperRaw.isEmpty && micWhisper.isEmpty) else {
             throw TranscriberError.empty
         }
-        Log.info("Two-channel: system \(systemWhisper.count) segments, mic \(micWhisper.count) segments")
+        Log.info("Two-channel: system \(systemWhisperRaw.count) segments, mic \(micWhisper.count) segments")
 
         // 2. Diarize each channel (tolerating per-channel failure), then
         //    renumber speaker labels into one shared "Speaker N" space.
@@ -202,8 +202,16 @@ enum Transcriber {
             }
             return (segments, embeddings)
         }
-        var (systemSegments, systemEmbeddings) = renumbered(systemOutcome)
-        var (micSegments, micEmbeddings) = renumbered(micOutcome)
+        var (systemSegments, systemEmbeddings) = renumbered(withoutSplinters(systemOutcome, channel: "system"))
+        var (micSegments, micEmbeddings) = renumbered(withoutSplinters(micOutcome, channel: "mic"))
+
+        // Whisper's "Thank you." over the gaps between turns lands on whatever
+        // voice is nearest; with the channel's own diarization to hand we can
+        // tell silence from speech and drop it here.
+        let systemWhisper = droppingStockPhrasesOverSilence(
+            whisper: systemWhisperRaw, diarized: systemSegments, log: "system")
+        micWhisper = droppingStockPhrasesOverSilence(
+            whisper: micWhisper, diarized: micSegments, log: "mic")
 
         // Cross-channel echo suppression — see echoDecision() for the rules.
         var micDurations: [String: Double] = [:]
@@ -225,7 +233,9 @@ enum Transcriber {
         let echoLabels = decision.labels
         micEmbeddings = micEmbeddings.filter { !echoLabels.contains($0.key) }
 
-        var allEmbeddings = systemEmbeddings.merging(micEmbeddings) { a, _ in a }
+        let allEmbeddings = catalogueWorthy(
+            systemEmbeddings.merging(micEmbeddings) { a, _ in a },
+            stats: voiceStats(systemSegments + micSegments))
 
         // 3. Match voices against the catalogue; rename matched+named labels.
         var displayNames: [String: String] = [:]
@@ -586,16 +596,19 @@ enum Transcriber {
         // Attribute Whisper's timestamped segments to diarized speakers.
         // Any diarization failure degrades to the plain transcript.
         do {
-            let outcome = try await Diarizer.diarize(audioURL: audioURL)
-            guard !outcome.segments.isEmpty else {
+            guard let outcome = withoutSplinters(
+                try await Diarizer.diarize(audioURL: audioURL), channel: "merged"),
+                !outcome.segments.isEmpty else {
                 return Output(text: plainText, speakerCount: nil)
             }
+            let voiceEmbeddings = catalogueWorthy(
+                outcome.meanEmbeddings, stats: voiceStats(outcome.segments))
 
             // Match each voice against the speaker catalogue: recognised and
             // named voices appear by name; unrecognised ones stay "Speaker N".
             var displayNames: [String: String] = [:]
             var matchedIDs: [String: UUID] = [:]
-            for (label, embedding) in outcome.meanEmbeddings {
+            for (label, embedding) in voiceEmbeddings {
                 if let match = SpeakerCatalog.shared.bestMatch(
                     embedding: embedding, threshold: voiceMatchThreshold) {
                     matchedIDs[label] = match.id
@@ -612,13 +625,15 @@ enum Transcriber {
                     Diarizer.SpeakerSegment(speaker: $0, start: segment.start, end: segment.end)
                 } ?? segment
             }
-            let whisperSegments = results
-                .flatMap(\.segments)
-                .filter { !isLikelyHallucination($0) }
-                .map { (start: Double($0.start), end: Double($0.end),
-                        text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
-                .filter { !$0.text.isEmpty }
-                .sorted { $0.start < $1.start }
+            let whisperSegments = droppingStockPhrasesOverSilence(
+                whisper: results
+                    .flatMap(\.segments)
+                    .filter { !isLikelyHallucination($0) }
+                    .map { (start: Double($0.start), end: Double($0.end),
+                            text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    .filter { !$0.text.isEmpty }
+                    .sorted { $0.start < $1.start },
+                diarized: outcome.segments, log: "merged")
             guard !whisperSegments.isEmpty else {
                 return Output(text: plainText, speakerCount: nil)
             }
@@ -637,7 +652,7 @@ enum Transcriber {
             let stamp = DateFormatter()
             stamp.dateFormat = "yyyy-MM-dd HH:mm"
             var speakerRecords: [(label: String, recordID: UUID)] = []
-            for (label, embedding) in outcome.meanEmbeddings {
+            for (label, embedding) in voiceEmbeddings {
                 let displayLabel = displayNames[label] ?? label
                 if let id = matchedIDs[label] {
                     SpeakerCatalog.shared.touch(id: id)
@@ -767,5 +782,48 @@ enum Transcriber {
                 }
             }
         }
+    }
+}
+
+// MARK: Diagnostics
+
+extension Transcriber {
+    /// Human-readable summary of a diarization outcome: per-cluster speech
+    /// totals, how alike the clusters' voices are, and what the catalogue
+    /// would call each of them. Backs `Earwig --diarize`.
+    static func describeClusters(_ outcome: Diarizer.Outcome) -> String {
+        var lines: [String] = []
+        let stats = voiceStats(outcome.segments)
+        let labels = stats.keys.sorted {
+            (Int($0.split(separator: " ").last ?? "") ?? -1) < (Int($1.split(separator: " ").last ?? "") ?? -1)
+        }
+        let channelTotal = stats.values.reduce(0) { $0 + $1.total }
+        for label in labels {
+            let entry = stats[label]!
+            let share = channelTotal > 0 ? entry.total / channelTotal * 100 : 0
+            let verdict = isCatalogueWorthy(entry) ? "" : "  [too little to identify]"
+            lines.append(String(
+                format: "%@: %.0fs speech (%.0f%%), %d segments, longest %.1fs%@",
+                label, entry.total, share, entry.segments, entry.longest, verdict))
+        }
+        for (i, a) in labels.enumerated() {
+            for b in labels[(i + 1)...] {
+                guard let ea = outcome.meanEmbeddings[a], let eb = outcome.meanEmbeddings[b] else { continue }
+                lines.append(String(
+                    format: "  %@ ~ %@: cosine %.2f", a, b, SpeakerCatalog.cosineSimilarity(ea, eb)))
+            }
+        }
+        let records = SpeakerCatalog.shared.all()
+        for label in labels {
+            guard let embedding = outcome.meanEmbeddings[label] else { continue }
+            let ranked = records
+                .map { (name: $0.name ?? "(unnamed \($0.id.uuidString.prefix(8)))",
+                        similarity: SpeakerCatalog.cosineSimilarity(embedding, $0.embedding)) }
+                .sorted { $0.similarity > $1.similarity }
+                .prefix(3)
+                .map { String(format: "%@ %.2f", $0.name, $0.similarity) }
+            lines.append("  \(label) catalogue: " + ranked.joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
     }
 }

@@ -53,9 +53,11 @@ The `status: raw-transcript` field lets downstream tooling tell which files it h
 ## Build & run
 
 ```sh
-./build.sh          # builds and signs Earwig.app
+./build.sh          # builds and signs Earwig.app (pins SDKROOT to the newest macOS 26.x SDK, see below)
 open Earwig.app
 ```
+
+Command Line Tools 26.x ship the macOS 27 SDK, where SwiftUI's `@State` is a macro whose plugin the bare tools don't include, so a plain `swift build` fails with "plugin for module 'SwiftUIMacros' not found". `build.sh` works around it by building against the newest macOS 26.x SDK still installed alongside; set `SDKROOT` yourself to override, and the same setting is needed for `swift run earwig-tests`.
 
 To start it automatically: System Settings → General → Login Items → add `Earwig.app`.
 
@@ -89,12 +91,14 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
   "enableDiarization": true,
   "voiceMatchThreshold": 0.6,
   "enableTranscriptRepair": true,
-  "vocabulary": ["Orbit", "Zurb -> Azure"]
+  "vocabulary": ["Orbit", "Zurb -> Azure"],
+  "audioRetentionDays": 60
 }
 ```
 
 - `notesFolder` — where transcript markdown files are written; point your downstream tooling here.
 - `keepAudio` — set `false` to delete the merged `.m4a` after a successful transcription.
+- `audioRetentionDays` — offer to delete merged `meeting-*.m4a` recordings older than this many days (default 60; `0` keeps them forever). Earwig checks at launch and daily (never mid-recording) and asks before deleting anything: **Delete**, **Show in Finder**, or **Not Now** (asks again in a week). Settings → Review Old Recordings… checks on demand. Speaker clips, live-notes stashes and transcripts are never touched.
 - `localeIdentifier` — speech recognition language (defaults to your system locale).
 - `autoStopGraceSeconds` — how long a call must be off the microphone before the recording auto-stops (default 30). Raise it if flaky network reconnects split your meetings; lower it for snappier splits between back-to-back calls.
 - `vocabulary` — user dictionary: a list of canonical terms ("Orbit") and correction pairs ("Zurb -> Azure") for words speech-to-text gets wrong. Speaker-catalogue names are added automatically.
@@ -115,7 +119,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 ## Tests & evals
 
 ```sh
-swift run earwig-tests
+SDKROOT=$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk | sort -V | tail -1) swift run earwig-tests
 ```
 
 Swift Testing suite covering the pipeline's pure logic — hallucination gates, echo detection, speaker attribution, dictionary corrections, repair guardrails, the note format contract, config compatibility — plus the audio-capture safety net (a raised Objective-C exception must arrive as a Swift error rather than aborting the app). Includes regression fixtures captured from real meeting failures. (The runner is an executable because SwiftPM's `swift test` cannot drive swift-testing on bare Command Line Tools installs.)
@@ -149,6 +153,7 @@ Each case must reproduce a plain-Whisper reference transcript (measured as token
 
 # Speaker catalogue from the command line (e.g. for downstream tooling)
 ./Earwig.app/Contents/MacOS/Earwig --list-speakers
+./Earwig.app/Contents/MacOS/Earwig --diarize meeting.m4a      # or mic.caf system.caf
 ./Earwig.app/Contents/MacOS/Earwig --set-speaker-name <id-prefix> "Sarah"
 ```
 

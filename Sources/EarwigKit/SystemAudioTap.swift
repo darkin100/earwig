@@ -57,7 +57,7 @@ final class SystemAudioTap {
             var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
             status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
             guard status == noErr else { throw TapError.coreAudio("read tap format", status) }
-            let sampleRate = asbd.mSampleRate > 0 ? asbd.mSampleRate : 48000
+            let declaredRate = asbd.mSampleRate
 
             // Aggregate device wrapping the default output device + our tap.
             let outputUID = try Self.defaultOutputDeviceUID()
@@ -101,16 +101,16 @@ final class SystemAudioTap {
                         : AVAudioChannelCount(bufferCount)
                     // The tap's declared format can lie about the rate: when a
                     // Bluetooth headset's mic is in use, the whole device drops
-                    // to call mode (~24kHz) while the tap still claims 48kHz —
-                    // recording everything at 2x speed. The aggregate device's
+                    // to call mode (16-24kHz) while the tap still claims 48kHz —
+                    // recording everything at 2-3x speed. The aggregate device's
                     // *current* nominal rate is authoritative at the moment
                     // buffers actually flow.
-                    var effectiveRate = sampleRate
-                    if let deviceRate = Self.nominalSampleRate(of: self.aggregateID), deviceRate > 0 {
-                        if abs(deviceRate - sampleRate) > 1 {
-                            Log.info("system tap: device runs at \(Int(deviceRate))Hz, tap declared \(Int(sampleRate))Hz — using device rate")
-                        }
-                        effectiveRate = deviceRate
+                    let deviceRate = Self.nominalSampleRate(of: self.aggregateID)
+                    let effectiveRate = Self.resolvedSampleRate(
+                        declared: declaredRate, device: deviceRate)
+                    if let deviceRate,
+                       Self.isMeaningfulRateChange(from: declaredRate, to: deviceRate) {
+                        Log.info("system tap: device runs at \(Int(deviceRate))Hz, tap declared \(Int(declaredRate))Hz — using device rate")
                     }
                     guard let format = AVAudioFormat(
                         commonFormat: .pcmFormatFloat32,
@@ -165,7 +165,7 @@ final class SystemAudioTap {
                 guard let self else { return }
                 let newRate = Self.nominalSampleRate(of: self.aggregateID) ?? 0
                 let fileRate = self.tapFormat?.sampleRate ?? 0
-                if fileRate > 0, abs(newRate - fileRate) > 1 {
+                if Self.isMeaningfulRateChange(from: fileRate, to: newRate) {
                     Log.info("WARNING: device sample rate changed mid-recording (\(Int(fileRate))Hz -> \(Int(newRate))Hz) — system audio from this point may be mis-timed; stop and restart the recording to correct it")
                 }
             }
@@ -203,6 +203,34 @@ final class SystemAudioTap {
         file = nil
         tapFormat = nil
         loggedWriteError = false
+    }
+
+    // MARK: rate policy
+
+    /// The rate to fall back on when neither the tap nor the device will say.
+    static let assumedSampleRate: Double = 48000
+
+    /// Which rate the capture file should actually be written at.
+    ///
+    /// The device's live rate wins whenever it is readable: activating a
+    /// Bluetooth headset's microphone drops the whole device into call mode
+    /// (16kHz, or 24kHz on newer hardware) while the tap goes on declaring
+    /// 48kHz, and writing 16kHz samples into a 48kHz file plays the whole
+    /// meeting back at 3x speed — unintelligible, and it wrecks diarization.
+    static func resolvedSampleRate(declared: Double, device: Double?) -> Double {
+        if let device, device > 0 { return device }
+        if declared > 0 { return declared }
+        return assumedSampleRate
+    }
+
+    /// Whether a rate reading differs enough from the one the file was opened
+    /// with to matter. Both rates must be real: a zero `from` means no file has
+    /// been created yet, and a zero `to` means the property read failed —
+    /// neither is a rate change, and reporting them as one would bury the real
+    /// warning in noise.
+    static func isMeaningfulRateChange(from fileRate: Double, to newRate: Double) -> Bool {
+        guard fileRate > 0, newRate > 0 else { return false }
+        return abs(newRate - fileRate) > 1
     }
 
     // MARK: helpers

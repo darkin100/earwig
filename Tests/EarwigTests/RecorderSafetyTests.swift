@@ -33,7 +33,10 @@ struct RecorderSafetyTests {
     }
 
     @Test func inputFormatsAreValidatedBeforeUse() {
-        // Real devices: AirPods in hands-free mode, built-in mic.
+        // Real devices: a headset in call mode at either of the two rates
+        // hands-free mode uses, and the built-in mic. A call-mode rate is
+        // degraded, not invalid — rejecting it would refuse to record.
+        #expect(Recorder.isUsableInputFormat(sampleRate: 16000, channelCount: 1))
         #expect(Recorder.isUsableInputFormat(sampleRate: 24000, channelCount: 1))
         #expect(Recorder.isUsableInputFormat(sampleRate: 48000, channelCount: 2))
         // Published while a device is being torn down / re-advertised.

@@ -233,13 +233,18 @@ enum TranscriptRepair {
     }
 
     /// A repair is only accepted when the chunk comes back structurally
-    /// intact: same speaker-marker count, similar length.
+    /// intact: same speakers in the same order, same marker count, similar
+    /// length.
     static func isSafeRepair(original: String, candidate: String) -> Bool {
         guard !candidate.isEmpty else { return false }
         let ratio = Double(candidate.count) / Double(max(1, original.count))
         guard ratio > 0.7, ratio < 1.3 else { return false }
         let markerCount = { (s: String) in s.components(separatedBy: "**").count }
         guard markerCount(original) == markerCount(candidate) else { return false }
+        // The speakers must come back exactly as they went in: the model once
+        // lowercased "Glyn" and "Sam" for a stretch of turns, which reads
+        // downstream as two extra people.
+        guard speakerNames(in: original) == speakerNames(in: candidate) else { return false }
         // Markdown headings must survive verbatim (the model once renamed
         // "## Transcript" to "## Corrected Transcript").
         let headings = { (s: String) in
