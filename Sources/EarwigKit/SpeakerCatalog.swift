@@ -122,26 +122,6 @@ final class SpeakerCatalog {
         save()
     }
 
-    struct Match {
-        let id: UUID
-        let name: String?
-        let similarity: Double
-    }
-
-    /// Best cosine match across the catalogue, or nil below the threshold.
-    func bestMatch(embedding: [Float], threshold: Double) -> Match? {
-        lock.lock(); defer { lock.unlock() }
-        var best: (record: SpeakerRecord, similarity: Double)?
-        for record in records {
-            let similarity = Self.cosineSimilarity(embedding, record.embedding)
-            if similarity >= threshold, similarity > (best?.similarity ?? -1) {
-                best = (record, similarity)
-            }
-        }
-        guard let best else { return nil }
-        return Match(id: best.record.id, name: best.record.name, similarity: best.similarity)
-    }
-
     func touch(id: UUID) {
         lock.lock(); defer { lock.unlock() }
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }

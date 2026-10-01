@@ -160,7 +160,11 @@ extension Transcriber {
                 format: "%@ channel: %@ is a splinter (%.0f%% of the speech, longest segment %.1fs) — folded into %@",
                 channel, merge.splinter, merge.share * 100, merge.longest, merge.into))
         }
-        return Diarizer.Outcome(segments: result.segments, meanEmbeddings: result.embeddings)
+        // A splinter's windows measured the fragments, not the voice it was
+        // folded into, so they don't come along.
+        return Diarizer.Outcome(
+            segments: result.segments, meanEmbeddings: result.embeddings,
+            chunks: outcome.chunks.filter { result.embeddings[$0.speaker] != nil })
     }
 
     static func catalogueWorthy(

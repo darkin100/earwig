@@ -184,8 +184,9 @@ enum Transcriber {
 
         var labelCount = 0
         func renumbered(_ outcome: Diarizer.Outcome?)
-            -> (segments: [Diarizer.SpeakerSegment], embeddings: [String: [Float]]) {
-            guard let outcome else { return ([], [:]) }
+            -> (segments: [Diarizer.SpeakerSegment], embeddings: [String: [Float]],
+                chunks: [Diarizer.SpeakerSegment]) {
+            guard let outcome else { return ([], [:], []) }
             var map: [String: String] = [:]
             var segments: [Diarizer.SpeakerSegment] = []
             for segment in outcome.segments.sorted(by: { $0.start < $1.start }) {
@@ -200,10 +201,15 @@ enum Transcriber {
             for (old, embedding) in outcome.meanEmbeddings {
                 if let new = map[old] { embeddings[new] = embedding }
             }
-            return (segments, embeddings)
+            let chunks = outcome.chunks.compactMap { chunk in
+                map[chunk.speaker].map {
+                    Diarizer.SpeakerSegment(speaker: $0, start: chunk.start, end: chunk.end, embedding: chunk.embedding)
+                }
+            }
+            return (segments, embeddings, chunks)
         }
-        var (systemSegments, systemEmbeddings) = renumbered(withoutSplinters(systemOutcome, channel: "system"))
-        var (micSegments, micEmbeddings) = renumbered(withoutSplinters(micOutcome, channel: "mic"))
+        var (systemSegments, systemEmbeddings, systemChunks) = renumbered(withoutSplinters(systemOutcome, channel: "system"))
+        var (micSegments, micEmbeddings, micChunks) = renumbered(withoutSplinters(micOutcome, channel: "mic"))
 
         // Whisper's "Thank you." over the gaps between turns lands on whatever
         // voice is nearest; with the channel's own diarization to hand we can
@@ -238,16 +244,23 @@ enum Transcriber {
             stats: voiceStats(systemSegments + micSegments))
 
         // 3. Match voices against the catalogue; rename matched+named labels.
+        //    Voices that blend several people or can't be told apart from
+        //    someone else stay unnamed and out of the catalogue.
         var displayNames: [String: String] = [:]
         var matchedIDs: [String: UUID] = [:]
+        var unidentifiable: Set<String> = []
+        let catalogue = catalogueVoices()
         for (label, embedding) in allEmbeddings {
-            if let match = SpeakerCatalog.shared.bestMatch(
-                embedding: embedding, threshold: voiceMatchThreshold) {
+            switch identifyLogged(
+                label: label, mean: embedding, chunks: systemChunks + micChunks,
+                catalogue: catalogue, threshold: voiceMatchThreshold) {
+            case .recognised(let match):
                 matchedIDs[label] = match.id
-                if let name = match.name, !name.isEmpty {
-                    displayNames[label] = name
-                    Log.info("Recognised \(label) as \(name) (similarity \(String(format: "%.2f", match.similarity)))")
-                }
+                if let name = match.name, !name.isEmpty { displayNames[label] = name }
+            case .ambiguous, .mixed:
+                unidentifiable.insert(label)
+            case .newVoice:
+                break
             }
         }
         func renamed(_ segments: [Diarizer.SpeakerSegment]) -> [Diarizer.SpeakerSegment] {
@@ -339,7 +352,8 @@ enum Transcriber {
             if let id = matchedIDs[label] {
                 SpeakerCatalog.shared.touch(id: id)
                 speakerRecords.append((label: displayLabel, recordID: id))
-            } else if let clip = samples.first(where: { $0.speaker == displayLabel })?.url {
+            } else if !unidentifiable.contains(label),
+                      let clip = samples.first(where: { $0.speaker == displayLabel })?.url {
                 if let id = SpeakerCatalog.shared.register(
                     context: "\(label) · meeting \(stamp.string(from: Date()))",
                     embedding: embedding,
@@ -608,16 +622,19 @@ enum Transcriber {
             // named voices appear by name; unrecognised ones stay "Speaker N".
             var displayNames: [String: String] = [:]
             var matchedIDs: [String: UUID] = [:]
+            var unidentifiable: Set<String> = []
+            let catalogue = catalogueVoices()
             for (label, embedding) in voiceEmbeddings {
-                if let match = SpeakerCatalog.shared.bestMatch(
-                    embedding: embedding, threshold: voiceMatchThreshold) {
+                switch identifyLogged(
+                    label: label, mean: embedding, chunks: outcome.chunks,
+                    catalogue: catalogue, threshold: voiceMatchThreshold) {
+                case .recognised(let match):
                     matchedIDs[label] = match.id
-                    if let name = match.name, !name.isEmpty {
-                        displayNames[label] = name
-                        Log.info("Recognised \(label) as \(name) (similarity \(String(format: "%.2f", match.similarity)))")
-                    } else {
-                        Log.info("\(label) matches an uncatalogued voice heard before (similarity \(String(format: "%.2f", match.similarity)))")
-                    }
+                    if let name = match.name, !name.isEmpty { displayNames[label] = name }
+                case .ambiguous, .mixed:
+                    unidentifiable.insert(label)
+                case .newVoice:
+                    break
                 }
             }
             let speakerSegments = outcome.segments.map { segment in
@@ -657,7 +674,8 @@ enum Transcriber {
                 if let id = matchedIDs[label] {
                     SpeakerCatalog.shared.touch(id: id)
                     speakerRecords.append((label: displayLabel, recordID: id))
-                } else if let clip = samples.first(where: { $0.speaker == displayLabel })?.url {
+                } else if !unidentifiable.contains(label),
+                          let clip = samples.first(where: { $0.speaker == displayLabel })?.url {
                     if let id = SpeakerCatalog.shared.register(
                         context: "\(label) · meeting \(stamp.string(from: Date()))",
                         embedding: embedding,
@@ -823,6 +841,33 @@ extension Transcriber {
                 .prefix(3)
                 .map { String(format: "%@ %.2f", $0.name, $0.similarity) }
             lines.append("  \(label) catalogue: " + ranked.joined(separator: ", "))
+        }
+        // How identification would decide each voice, block by block.
+        let catalogue = catalogueVoices()
+        let threshold = Config.load().effectiveVoiceMatchThreshold
+        for label in labels {
+            guard let mean = outcome.meanEmbeddings[label] else { continue }
+            let blocks = voiceprintBlocks(outcome.chunks, speaker: label)
+            let votes = blocks.map { block -> String in
+                guard let top = rankedCandidates(block.embedding, catalogue: catalogue).first else { return "?" }
+                return String(format: "%.0fw:%@ %.2f", block.weight, top.displayName, top.similarity)
+            }
+            let decision: String
+            switch identify(mean: mean, blocks: blocks, catalogue: catalogue, threshold: threshold) {
+            case .recognised(let c):
+                let support = blockSupport(for: c, blocks: blocks, catalogue: catalogue, threshold: threshold)
+                let runnerUp = rankedCandidates(mean, catalogue: catalogue).dropFirst().first
+                decision = String(format: "recognised as %@ (%.2f, next %@ %.2f), %@ support",
+                                  c.displayName, c.similarity, runnerUp?.displayName ?? "-", runnerUp?.similarity ?? 0,
+                                  support.map { String(format: "%.0f%%", $0 * 100) } ?? "n/a")
+            case .newVoice: decision = "new voice"
+            case .ambiguous(let b, let r):
+                decision = String(format: "ambiguous: %@ %.2f vs %@ %.2f", b.displayName, b.similarity, r.displayName, r.similarity)
+            case .mixed(let b, let support):
+                decision = String(format: "mixed: %@ %.2f, %.0f%% support", b.displayName, b.similarity, support * 100)
+            }
+            lines.append("  \(label) decision: \(decision)")
+            lines.append("  \(label) blocks: " + votes.joined(separator: " | "))
         }
         return lines.joined(separator: "\n")
     }
