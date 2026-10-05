@@ -3,8 +3,8 @@ import Testing
 
 @testable import EarwigKit
 
-/// Audio cleanup: only merged recordings past the retention age are offered
-/// for deletion, and nothing is removed until `delete` is called.
+/// Audio archiving: only merged recordings past the retention age are offered,
+/// nothing moves until `archive` is called, and nothing is ever deleted.
 struct AudioRetentionTests {
     private func makeFolder(_ names: [String], dirs: [String] = []) throws -> URL {
         let folder = FileManager.default.temporaryDirectory
@@ -50,7 +50,7 @@ struct AudioRetentionTests {
         #expect(expired.allSatisfy { $0.bytes == 1 })
     }
 
-    @Test func findingCandidatesDeletesNothing() throws {
+    @Test func findingCandidatesMovesNothing() throws {
         let folder = try makeFolder(["meeting-2020-01-01-0900.m4a", "meeting-2020-01-02-0900.m4a"])
         defer { try? FileManager.default.removeItem(at: folder) }
 
@@ -58,10 +58,38 @@ struct AudioRetentionTests {
         #expect(expired.count == 2)
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 2)
 
-        let freed = AudioRetention.delete(Array(expired.prefix(1)))
-        #expect(freed == 1)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) ==
-            ["meeting-2020-01-02-0900.m4a"])
+        let archive = AudioRetention.archiveFolder(in: folder)
+        let moved = AudioRetention.archive(Array(expired.prefix(1)), to: archive)
+        #expect(moved == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() ==
+            ["archive", "meeting-2020-01-02-0900.m4a"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: archive.path) ==
+            ["meeting-2020-01-01-0900.m4a"])
+    }
+
+    @Test func archivedRecordingsAreNotOfferedAgain() throws {
+        let folder = try makeFolder(["meeting-2020-01-01-0900.m4a"])
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let archive = AudioRetention.archiveFolder(in: folder)
+        AudioRetention.archive(AudioRetention.expired(folder: folder, olderThanDays: 60), to: archive)
+        #expect(AudioRetention.expired(folder: folder, olderThanDays: 60).isEmpty)
+    }
+
+    @Test func neverOverwritesAnArchivedRecording() throws {
+        let folder = try makeFolder(["meeting-2020-01-01-0900.m4a"])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let archive = AudioRetention.archiveFolder(in: folder)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let existing = archive.appendingPathComponent("meeting-2020-01-01-0900.m4a")
+        try Data("older copy".utf8).write(to: existing)
+
+        let moved = AudioRetention.archive(
+            AudioRetention.expired(folder: folder, olderThanDays: 60), to: archive)
+        #expect(moved == 0)
+        #expect(try String(contentsOf: existing, encoding: .utf8) == "older copy")
+        #expect(FileManager.default.fileExists(
+            atPath: folder.appendingPathComponent("meeting-2020-01-01-0900.m4a").path))
     }
 
     @Test func zeroDaysNeverExpires() throws {

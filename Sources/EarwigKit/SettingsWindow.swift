@@ -103,14 +103,14 @@ struct SettingsView: View {
                 folderRow(label: "Notes folder", path: $notesFolder)
                 folderRow(label: "Audio folder", path: $audioFolder)
                 Toggle("Keep audio after transcription", isOn: $keepAudio)
-                Picker("Offer to delete recordings older than", selection: $audioRetentionDays) {
+                Picker("Offer to archive recordings older than", selection: $audioRetentionDays) {
                     ForEach(retentionChoices, id: \.days) { choice in
                         Text(choice.label).tag(choice.days)
                     }
                 }
                 .disabled(!keepAudio)
                 HStack {
-                    Text("You're asked before anything is deleted.")
+                    Text("Moved to the audio folder's archive/ subfolder, after asking.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()

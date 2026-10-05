@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private var windowAccessMenuItem: NSMenuItem!
 
     // Daily check for recordings past the retention age; the user is asked
-    // before anything is deleted.
+    // before anything is moved to the archive.
     private var audioCleanupTimer: Timer?
     private var audioCleanupPromptShowing = false
     private static let audioCleanupSnoozeKey = "audioCleanupSnoozedUntil"
@@ -505,8 +505,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
     }
 
-    /// Offers to delete merged recordings past the configured retention age.
-    /// Never deletes without the user's say-so. Automatic checks stay quiet
+    /// Offers to move merged recordings past the configured retention age into
+    /// the audio folder's archive. Never moves anything without the user's say-so. Automatic checks stay quiet
     /// while recording and for a week after "Not Now"; a check the user asked
     /// for from Settings always answers.
     private func offerAudioCleanup(userInitiated: Bool = false) {
@@ -521,13 +521,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         Task.detached(priority: .utility) {
             let candidates = AudioRetention.expired(folder: folder, olderThanDays: days)
             await MainActor.run {
-                self.promptAudioCleanup(candidates, days: days, userInitiated: userInitiated)
+                self.promptAudioCleanup(
+                    candidates, days: days, archive: AudioRetention.archiveFolder(in: folder),
+                    userInitiated: userInitiated)
             }
         }
     }
 
     private func promptAudioCleanup(
-        _ candidates: [AudioRetention.Candidate], days: Int, userInitiated: Bool
+        _ candidates: [AudioRetention.Candidate], days: Int, archive: URL, userInitiated: Bool
     ) {
         guard !audioCleanupPromptShowing else { return }
         if candidates.isEmpty {
@@ -536,7 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 alert.messageText = "No old recordings"
                 alert.informativeText = days > 0
                     ? "Nothing in the audio folder is older than \(AudioRetention.describe(days: days))."
-                    : "Recordings are set to be kept forever."
+                    : "Archiving old recordings is turned off."
                 NSApp.activate(ignoringOtherApps: true)
                 alert.runModal()
             }
@@ -549,17 +551,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         let total = candidates.reduce(0) { $0 + $1.bytes }
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Delete old meeting recordings?"
+        alert.messageText = "Archive old meeting recordings?"
         alert.informativeText = """
             \(candidates.count) recording\(candidates.count == 1 ? " is" : "s are") older than \
             \(AudioRetention.describe(days: days)), using \(AudioRetention.formatted(bytes: total)).
 
-            Transcripts and speaker clips are kept. Deleted recordings can't be recovered.
+            They'll be moved to \(archive.path). Nothing is deleted; transcripts and speaker \
+            clips stay where they are.
             """
-        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Archive")
         alert.addButton(withTitle: "Show in Finder")
         alert.addButton(withTitle: "Not Now")
-        alert.buttons[0].hasDestructiveAction = true
 
         audioCleanupPromptShowing = true
         NSApp.activate(ignoringOtherApps: true)
@@ -570,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         case .alertFirstButtonReturn:
             UserDefaults.standard.removeObject(forKey: Self.audioCleanupSnoozeKey)
             Task.detached(priority: .utility) {
-                AudioRetention.delete(candidates)
+                AudioRetention.archive(candidates, to: archive)
             }
         case .alertSecondButtonReturn:
             NSWorkspace.shared.activateFileViewerSelecting(candidates.map(\.url))

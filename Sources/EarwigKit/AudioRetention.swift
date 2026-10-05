@@ -1,9 +1,10 @@
 import Foundation
 
 /// Finds merged meeting recordings past the retention age so the user can be
-/// offered their deletion. Only `meeting-<yyyy-MM-dd-HHmm>.m4a` files qualify:
-/// the per-meeting speaker clips (linked from notes), stashed live notes and
-/// anything else in the audio folder are never candidates.
+/// offered to move them into the audio folder's `archive/` subfolder. Only
+/// `meeting-<yyyy-MM-dd-HHmm>.m4a` files at the top of the audio folder
+/// qualify: the per-meeting speaker clips (linked from notes), stashed live
+/// notes, already-archived recordings and anything else are never candidates.
 enum AudioRetention {
     struct Candidate {
         let url: URL
@@ -48,22 +49,38 @@ enum AudioRetention {
         .map(\.1)
     }
 
-    /// Permanently deletes `candidates`, returning the bytes actually freed.
+    static let archiveFolderName = "archive"
+
+    static func archiveFolder(in audioFolder: URL) -> URL {
+        audioFolder.appendingPathComponent(archiveFolderName, isDirectory: true)
+    }
+
+    /// Moves `candidates` into `archiveFolder`, returning the bytes moved. A
+    /// recording whose name is already taken in the archive stays where it is
+    /// — nothing is ever overwritten or deleted.
     @discardableResult
-    static func delete(_ candidates: [Candidate]) -> Int64 {
-        var freed: Int64 = 0
+    static func archive(_ candidates: [Candidate], to archiveFolder: URL) -> Int64 {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: archiveFolder, withIntermediateDirectories: true)
+        } catch {
+            Log.info("Audio archive: could not create \(archiveFolder.path): \(error)")
+            return 0
+        }
+        var moved: Int64 = 0
         var count = 0
         for candidate in candidates {
+            let destination = archiveFolder.appendingPathComponent(candidate.url.lastPathComponent)
             do {
-                try FileManager.default.removeItem(at: candidate.url)
-                freed += candidate.bytes
+                try fm.moveItem(at: candidate.url, to: destination)
+                moved += candidate.bytes
                 count += 1
             } catch {
-                Log.info("Audio cleanup could not delete \(candidate.url.lastPathComponent): \(error)")
+                Log.info("Audio archive could not move \(candidate.url.lastPathComponent): \(error)")
             }
         }
-        Log.info("Audio cleanup: deleted \(count) recording(s), freed \(formatted(bytes: freed))")
-        return freed
+        Log.info("Audio archive: moved \(count) recording(s), \(formatted(bytes: moved)), to \(archiveFolder.path)")
+        return moved
     }
 
     static func formatted(bytes: Int64) -> String {

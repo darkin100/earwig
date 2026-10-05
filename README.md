@@ -4,7 +4,7 @@ A macOS menu bar app that listens for meetings (Microsoft Teams, Google Meet, Sl
 
 Earwig deliberately stops at speech-to-text. Summarisation, action items, and any further processing happen downstream — point your own tooling (an LLM workflow, a Claude Cowork project, a shell script) at the notes folder.
 
-More detail lives in [`docs/`](docs/): [the processing pipeline](docs/pipeline.md) as diagrams, and [where audio is stored and when it is deleted](docs/audio-storage.md).
+More detail lives in [`docs/`](docs/): [the processing pipeline](docs/pipeline.md) as diagrams, and [where audio is stored, archived and deleted](docs/audio-storage.md).
 
 ## How it works
 
@@ -98,7 +98,7 @@ macOS ties permission grants to the app's code signature. `build.sh` signs ad-ho
 
 - `notesFolder` — where transcript markdown files are written; point your downstream tooling here.
 - `keepAudio` — set `false` to delete the merged `.m4a` after a successful transcription.
-- `audioRetentionDays` — offer to delete merged `meeting-*.m4a` recordings older than this many days (default 60; `0` keeps them forever). Earwig checks at launch and daily (never mid-recording) and asks before deleting anything: **Delete**, **Show in Finder**, or **Not Now** (asks again in a week). Settings → Review Old Recordings… checks on demand. Speaker clips, live-notes stashes and transcripts are never touched.
+- `audioRetentionDays` — offer to move merged `meeting-*.m4a` recordings older than this many days into `archive/` inside the audio folder (default 60; `0` never offers). Earwig checks at launch and daily (never mid-recording) and asks before moving anything: **Archive**, **Show in Finder**, or **Not Now** (asks again in a week). Settings → Review Old Recordings… checks on demand. Nothing is deleted — move or delete the `archive/` folder yourself when disk space matters (zipping it saves almost nothing; m4a is already compressed). Speaker clips, live-notes stashes and transcripts are never touched.
 - `localeIdentifier` — speech recognition language (defaults to your system locale).
 - `autoStopGraceSeconds` — how long a call must be off the microphone before the recording auto-stops (default 30). Raise it if flaky network reconnects split your meetings; lower it for snappier splits between back-to-back calls.
 - `vocabulary` — user dictionary: a list of canonical terms ("Orbit") and correction pairs ("Zurb -> Azure") for words speech-to-text gets wrong. Speaker-catalogue names are added automatically.

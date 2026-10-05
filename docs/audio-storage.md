@@ -12,7 +12,7 @@ Folder locations are configurable in `config.json`; the defaults below assume
 | File | Location | Written | Cleaned up |
 |---|---|---|---|
 | Raw channel captures (`mic.caf`, `system.caf`) | `$TMPDIR/earwig-<UUID>/` | during recording | deleted after a successful pipeline run; kept on failure for salvage; macOS purges old temp files itself |
-| Merged recording (`meeting-<stamp>.m4a`) | `~/MeetingNotes/audio/` | at recording stop, before transcription starts | kept forever if `keepAudio: true` (default); deleted right after the note is written if `keepAudio: false`; always kept if the pipeline fails |
+| Merged recording (`meeting-<stamp>.m4a`) | `~/MeetingNotes/audio/` | at recording stop, before transcription starts | kept if `keepAudio: true` (default), and offered for moving to `audio/archive/` once older than `audioRetentionDays` (default 60); deleted right after the note is written if `keepAudio: false`; always kept if the pipeline fails |
 | Live-notes stash (`meeting-<stamp>-livenotes.txt`) | `~/MeetingNotes/audio/` | at recording stop (only if the user typed notes) | deleted once the note is written; kept on failure so typed notes are never lost |
 | Speaker sample clips (`meeting-<stamp>-speakers/*.m4a`) | `~/MeetingNotes/audio/` | during transcription | never auto-deleted — the note's `speaker_samples` frontmatter references them |
 | Voice catalogue (`speakers.json` + `Speakers/<UUID>.m4a`) | `~/Library/Application Support/Earwig/` | when a new voice is registered | a voice's clip is deleted when its record is deleted in Settings → Speaker Identification |
@@ -56,6 +56,9 @@ Two details worth knowing:
 - **Quitting mid-transcription is safe.** The merged m4a is written before
   transcription begins, so a queued recording survives an app quit or crash —
   re-run it with `Earwig --process <audio.m4a>`.
-- **Nothing prunes the audio folder.** With `keepAudio: true`, every meeting's
-  m4a (~2 MB/min) and speaker-sample clips accumulate indefinitely; archive or
-  delete old ones manually when disk space matters.
+- **Old recordings are archived, never deleted.** With `keepAudio: true`,
+  Earwig offers (at launch, then daily, never mid-recording) to move merged
+  m4a files older than `audioRetentionDays` into `audio/archive/`. The archive
+  is never pruned, and speaker-sample clips stay in place because notes link to
+  them. To reclaim disk space (~2 MB/min of audio), move `archive/` to another
+  drive or delete it yourself. Zipping it won't help, since m4a is already compressed.

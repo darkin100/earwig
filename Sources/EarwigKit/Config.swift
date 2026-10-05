@@ -21,7 +21,8 @@ struct Config: Codable {
     // User dictionary: canonical terms ("Orbit") or correction pairs
     // ("Zurb -> Azure"). Speaker catalogue names are added automatically.
     var vocabulary: [String]?
-    // Delete merged recordings older than this many days; 0 keeps them forever.
+    // Offer to move merged recordings older than this many days into the audio
+    // folder's archive/ subfolder; 0 never offers.
     var audioRetentionDays: Int?
 
     var effectiveAutoStopGrace: Int { autoStopGraceSeconds ?? 30 }
